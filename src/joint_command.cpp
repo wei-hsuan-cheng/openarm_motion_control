@@ -171,11 +171,12 @@ public:
     // }
 
     // Ground-truth pose
-    // Translation: [0.324, 0.184, 0.062]
-    // Rotation: in Quaternion [-0.195, 0.925, 0.318, 0.075]
     // Joints: [-0.955, -0.674, 1.163, 1.321, 0.756, -0.59, -0.909]
     // Translation: [0.071, 0.005, 0.493]
     // Rotation: in Quaternion [-0.291, 0.481, 0.490, 0.666]
+    // Weird!!! Since in bimanual demo, it should be
+    // Translation: [0.324, 0.184, 0.062]
+    // Rotation: in Quaternion [-0.195, 0.925, 0.318, 0.075]
     joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.59, -0.909;
   }
 
