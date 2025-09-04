@@ -82,7 +82,7 @@ def rviz_spawner(context: LaunchContext, bimanual):
     ]
 
 
-def joint_command_spawner(context: LaunchContext, yaml_path):
+def pose_command_spawner(context: LaunchContext, yaml_path):
     # Honor runtime yaml_path
     yaml_resolved = context.perform_substitution(yaml_path)
     params_raw = _load_yaml_dict(os.path.expanduser(yaml_resolved))
@@ -110,8 +110,8 @@ def joint_command_spawner(context: LaunchContext, yaml_path):
     return [
         Node(
             package="openarm_motion_control",
-            executable="joint_command",
-            name="joint_command",
+            executable="pose_command",
+            name="pose_command",
             output="screen",
             parameters=[screw_list_params, motion_params],
         )
@@ -159,8 +159,8 @@ def generate_launch_description():
         function=rviz_spawner,
         args=[bimanual]
     )
-    joint_command_loader = OpaqueFunction(
-        function=joint_command_spawner,
+    pose_command_loader = OpaqueFunction(
+        function=pose_command_spawner,
         args=[yaml_path]
     )
 
@@ -171,5 +171,5 @@ def generate_launch_description():
         yaml_path_arg,
         robot_state_publisher_loader,
         rviz_loader,
-        joint_command_loader,
+        pose_command_loader,
     ])

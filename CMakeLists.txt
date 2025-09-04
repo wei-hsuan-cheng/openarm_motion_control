@@ -50,20 +50,24 @@ include_directories(
 # Source files
 set(LOAD_SCREW_LIST_SOURCES src/load_screw_list.cpp)
 set(JOINT_COMMAND_SOURCES src/joint_command.cpp)
+set(POSE_COMMAND_SOURCES src/pose_command.cpp)
 
 # Add executables
 add_executable(load_screw_list ${LOAD_SCREW_LIST_SOURCES})
 add_executable(joint_command ${JOINT_COMMAND_SOURCES})
+add_executable(pose_command ${POSE_COMMAND_SOURCES})
 
 # Link libraries
 ament_target_dependencies(load_screw_list ${dependencies})
 ament_target_dependencies(joint_command ${dependencies})
+ament_target_dependencies(pose_command ${dependencies})
 
 # Install targets
 install(TARGETS
   load_screw_list
   joint_command
-
+  pose_command
+  
   DESTINATION lib/${PROJECT_NAME}
 )
 

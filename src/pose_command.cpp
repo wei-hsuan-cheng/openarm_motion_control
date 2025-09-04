@@ -14,12 +14,12 @@
 using RM = RMUtils;
 using std::placeholders::_1;
 
-class JointCommand : public rclcpp::Node {
+class PoseCommand : public rclcpp::Node {
 public:
-  JointCommand() : rclcpp::Node("joint_command") 
+  PoseCommand() : rclcpp::Node("pose_command") 
   {
     // Init project
-    RCLCPP_INFO(get_logger(), "Starting [JointCommand]. . .");
+    RCLCPP_INFO(get_logger(), "Starting [PoseCommand]. . .");
     // Load ROS 2 parameters from yaml file
     loadYAMLParams();
     // Init
@@ -130,7 +130,15 @@ public:
 
   void initRobotControl()
   {
-    joint_angles_cmd_.resize(n_);
+    pos_quat_b_e_cmd_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
+    
+    theta_sol_ = VectorXd::Zero(n_);
+    joint_angles_cmd_ = VectorXd::Zero(n_);
+
+    // IK initial guess
+    theta_sol_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.59, -0.909;
+    joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.59, -0.909;
+
     pos_quat_b_e_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
   }
 
@@ -151,7 +159,7 @@ public:
     timer_period_ = std::chrono::duration<double>(Ts_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period_),
-      std::bind(&JointCommand::timerCallback, this)
+      std::bind(&PoseCommand::timerCallback, this)
     );
 
     // -------- Record start time --------
@@ -163,20 +171,40 @@ public:
     return this->get_clock()->now(); 
   }
 
-  void getJointCommand()
+  void getPoseCommand()
   {
-    // // θ(t) = q0 + A ⊙ sin(2π f t + φ)
-    // for (int i = 0; i < n_; ++i) {
-    //   joint_angles_cmd_(i) = q0_[i] + A_[i] * std::sin(2.0 * M_PI * f_[i] * t_ + phi_[i]);
-    // }
-
     // Ground-truth pose
     // Translation: [0.324, 0.184, 0.062]
     // Rotation: in Quaternion [-0.195, 0.925, 0.318, 0.075]
     // Joints: [-0.955, -0.674, 1.163, 1.321, 0.756, -0.59, -0.909]
     // Translation: [0.071, 0.005, 0.493]
     // Rotation: in Quaternion [-0.291, 0.481, 0.490, 0.666]
-    joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.59, -0.909;
+    pos_quat_b_e_cmd_.pos = Vector3d(0.071, 0.005, 0.493);
+    pos_quat_b_e_cmd_.quat = Quaterniond(0.666, -0.291, 0.481, 0.490); // (w,x,y,z)
+  }
+
+  void solveIK()
+  {
+    // === IK solve ===
+    theta_sol_ = joint_angles_cmd_;
+    const double eomg = 1e-7;      // orientation tol (‖ω‖) [rad]
+    const double ev   = 1e-7;      // position tol (‖v‖) [m]
+    int cur_iter = 0; // current iteration (for debugging)
+    const int    max_iter = 200;
+    const double lambda   = 1e-2;  // DLS damping (set 0.0 to disable)
+    const double step_clip = 0.0;  // set >0.0 (e.g., 0.2) to cap per-step |Δθ|
+    const bool   wrap_pi   = true;
+
+    auto t_start = std::chrono::high_resolution_clock::now();
+    bool ok = RM::IKNum(screws_, pos_quat_b_e_cmd_, theta_sol_, cur_iter, eomg, ev, max_iter, lambda, step_clip, wrap_pi);
+    auto t_end   = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed_ms = t_end - t_start;
+
+    std::cout << "\n-- IK success -->\n" << (ok ? "[SUCCEEDED]" : "[FAILED]") << "\n";
+    std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
+    std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
+
+    joint_angles_cmd_ = theta_sol_;
   }
 
   void solveFK()
@@ -213,7 +241,9 @@ private:
   void timerCallback() 
   {
     t_ = (now_time() - start_time_).seconds();
-    getJointCommand();
+    
+    getPoseCommand();
+    solveIK();
     solveFK();
     publishStates();
   }
@@ -235,6 +265,8 @@ private:
   MatrixXd S_;
   PosQuat M_;
   ScrewList screws_;
+  PosQuat pos_quat_b_e_cmd_;
+  VectorXd theta_sol_;
   VectorXd joint_angles_cmd_;
   PosQuat pos_quat_b_e_;
 
@@ -247,7 +279,7 @@ private:
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<JointCommand>());
+    rclcpp::spin(std::make_shared<PoseCommand>());
   } catch (const std::exception& e) {
     std::cerr << "Fatal: " << e.what() << std::endl;
   }

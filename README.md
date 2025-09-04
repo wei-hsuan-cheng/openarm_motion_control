@@ -27,4 +27,10 @@ ros2 launch openarm_motion_control joint_command.launch.py \
 arm_type:=v10 \
 bimanual:=false
 # ee_type:=none
+
+# Task space motion
+ros2 launch openarm_motion_control pose_command.launch.py \
+arm_type:=v10 \
+bimanual:=false
+# ee_type:=none
 ```
