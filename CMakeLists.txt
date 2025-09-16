@@ -77,7 +77,7 @@ install(DIRECTORY
 )
 
 install(
-  DIRECTORY launch screw_lists
+  DIRECTORY launch screw_lists rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
