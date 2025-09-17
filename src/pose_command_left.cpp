@@ -138,9 +138,6 @@ public:
     theta_sol_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
     joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
 
-    // theta_sol_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
-    // joint_angles_cmd_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
-
     pos_quat_b_e_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
   }
 
@@ -177,19 +174,35 @@ public:
     return this->get_clock()->now(); 
   }
 
+  bool everyTimeInterval(double t = 2.0) {
+    static auto last_call = std::chrono::steady_clock::now();
+
+    auto now = std::chrono::steady_clock::now();
+    double elapsed_sec =
+        std::chrono::duration_cast<std::chrono::duration<double>>(now - last_call).count();
+
+    if (elapsed_sec >= t) {
+      last_call = now;
+      return true;
+    }
+    return false;
+  }
+
   void getPoseCommand()
   {
     // Ground-truth nominal (centroid) pose
     // Joints: [-0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909]
     // Translation: [0.324, 0.093, 0.515]
     // Rotation: in Quaternion [-0.085, -0.191, 0.879, -0.429] // (w,x,y,z)
-    pos_quat_b_e_cmd_.pos = Vector3d(0.324, 0.093, 0.515); // [m]
+
+    pos_quat_b_e_cmd_.pos = Vector3d(0.32, 0.15, 0.51); // [m]
     pos_quat_b_e_cmd_.quat = Quaterniond(-0.085, -0.191, 0.879, -0.429); // (w,x,y,z)
 
     // Time varying pose command
-    double offset_x = 0.05 * cos(2.0 * M_PI * f_[0] * t_); // [m]
+    double r = 0.1; // [m]
+    double offset_x = r * cos(2.0 * M_PI * f_[0] * t_); // [m]
     double offset_y = 0.0; // [m]
-    double offset_z = 0.05 * sin(2.0 * M_PI * f_[1] * t_); // [m]
+    double offset_z = r * sin(2.0 * M_PI * f_[1] * t_); // [m]
     double offset_thx = 0.0; // [rad]
     double offset_thy = 0.0; // [rad]
     double offset_thz = 0.0; // [rad]
@@ -197,7 +210,6 @@ public:
     PosQuat pos_quat_offset = PosQuat(Vector3d(offset_x, offset_y, offset_z), 
                                       RM::zyxEuler2Quat(Vector3d(offset_thz, offset_thy, offset_thx)));
     pos_quat_b_e_cmd_ = RM::TransformPosQuats({pos_quat_b_e_cmd_, pos_quat_offset});
-
   }
 
   void solveIK()
@@ -217,12 +229,16 @@ public:
     auto t_end   = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_ms = t_end - t_start;
 
-    std::cout << "\n-- IK target pose pos_quat_b_e_cmd_ -->\n";
-    std::cout << "pos [m]: " << pos_quat_b_e_cmd_.pos.transpose() << "\n";
-    std::cout << "quat (w,x,y,z): " << pos_quat_b_e_cmd_.quat.w() << ", " << pos_quat_b_e_cmd_.quat.x() << ", " << pos_quat_b_e_cmd_.quat.y() << ", " << pos_quat_b_e_cmd_.quat.z() << "\n";
-    std::cout << "-- IK success -->\n" << (ok ? "[SUCCEEDED]" : "[FAILED]") << "\n";
-    std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
-    std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
+    if (everyTimeInterval(2.0))
+    {
+      std::cout << "\n===== Right arm pose command =====\n";
+      std::cout << "-- IK target pose pos_quat_b_e_cmd_ [m, quat_wxyz] -->\n" 
+        << pos_quat_b_e_cmd_.pos.x() << ", " << pos_quat_b_e_cmd_.pos.y() << ", " << pos_quat_b_e_cmd_.pos.z() << ", " 
+        << pos_quat_b_e_cmd_.quat.w() << ", " << pos_quat_b_e_cmd_.quat.x() << ", " << pos_quat_b_e_cmd_.quat.y() << ", " << pos_quat_b_e_cmd_.quat.z() << "\n";
+      std::cout << "-- IK success -->\n" << (ok ? "[SUCCEEDED]" : "[FAILED]") << "\n";
+      std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
+      std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
+    }
 
     joint_angles_cmd_ = theta_sol_;
   }
