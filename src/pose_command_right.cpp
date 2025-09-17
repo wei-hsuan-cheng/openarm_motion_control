@@ -183,17 +183,17 @@ public:
     pos_quat_b_e_cmd_.pos = Vector3d(0.320, -0.098, 0.508); // [m]
     pos_quat_b_e_cmd_.quat = Quaterniond(-0.085, 0.191, 0.879, 0.429); // (w,x,y,z)
 
-    // // Time varying pose command
-    // double offset_x = 0.05 * cos(2.0 * M_PI * f_[0] * t_); // [m]
-    // double offset_y = 0.0; // [m]
-    // double offset_z = 0.05 * sin(2.0 * M_PI * f_[1] * t_); // [m]
-    // double offset_thx = 0.0; // [rad]
-    // double offset_thy = 0.0; // [rad]
-    // double offset_thz = 0.0; // [rad]
+    // Time varying pose command
+    double offset_x = 0.05 * cos(2.0 * M_PI * f_[0] * t_); // [m]
+    double offset_y = 0.0; // [m]
+    double offset_z = 0.05 * sin(2.0 * M_PI * f_[1] * t_); // [m]
+    double offset_thx = 0.0; // [rad]
+    double offset_thy = 0.0; // [rad]
+    double offset_thz = 0.0; // [rad]
 
-    // PosQuat pos_quat_offset = PosQuat(Vector3d(offset_x, offset_y, offset_z), 
-    //                                   RM::zyxEuler2Quat(Vector3d(offset_thz, offset_thy, offset_thx)));
-    // pos_quat_b_e_cmd_ = RM::TransformPosQuats({pos_quat_b_e_cmd_, pos_quat_offset});
+    PosQuat pos_quat_offset = PosQuat(Vector3d(offset_x, offset_y, offset_z), 
+                                      RM::zyxEuler2Quat(Vector3d(offset_thz, offset_thy, offset_thx)));
+    pos_quat_b_e_cmd_ = RM::TransformPosQuats({pos_quat_b_e_cmd_, pos_quat_offset});
   }
 
   void solveIK()
