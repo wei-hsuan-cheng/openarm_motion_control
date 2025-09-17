@@ -135,11 +135,8 @@ public:
     joint_angles_cmd_ = VectorXd::Zero(n_); // Joint command to the robot
 
     // IK initial guess
-    theta_sol_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
-    joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
-
-    // theta_sol_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
-    // joint_angles_cmd_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
+    theta_sol_ << 0.955, 0.674, -1.163, 1.321, -0.756, 0.590, 0.909;
+    joint_angles_cmd_ << 0.955, 0.674, -1.163, 1.321, -0.756, 0.590, 0.909;
 
     pos_quat_b_e_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
   }
@@ -180,24 +177,16 @@ public:
   void getPoseCommand()
   {
     // Ground-truth nominal (centroid) pose
-    // Joints: [-0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909]
-    // Translation: [0.324, 0.184, 0.062]
-    // Rotation: in Quaternion [0.075, -0.195, 0.925, 0.318] // (w,x,y,z)
-    pos_quat_b_e_cmd_.pos = Vector3d(0.324, 0.184, 0.062); // [m]
-    pos_quat_b_e_cmd_.quat = Quaterniond(0.075, -0.195, 0.925, 0.318); // (w,x,y,z)
-
-    // // Ground-truth nominal (centroid) pose
-    // // Joints: [-0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693]
-    // // Translation: [0.25, 0.0, 0.25]
-    // // Rotation: in Quaternion [0.392847, 0.587938, 0.587938, 0.392847] // (w,x,y,z)
-
-    // pos_quat_b_e_cmd_.pos = Vector3d(0.25, 0.0, 0.25); // [m]
-    // pos_quat_b_e_cmd_.quat = RM::zyxEuler2Quat(Vector3d(M_PI/2.0, 0.0, M_PI/2.0 + M_PI/8.0)); // (w,x,y,z)
+    // Joints: [0.955, 0.674, -1.163, 1.321, -0.756, 0.590, 0.909]
+    // Translation: [0.320, -0.098, 0.508]
+    // Rotation: in Quaternion [-0.085, 0.191, 0.879, 0.429] // (w,x,y,z)
+    pos_quat_b_e_cmd_.pos = Vector3d(0.320, -0.098, 0.508); // [m]
+    pos_quat_b_e_cmd_.quat = Quaterniond(-0.085, 0.191, 0.879, 0.429); // (w,x,y,z)
 
     // // Time varying pose command
-    // double offset_x = 0.1 * cos(2.0 * M_PI * f_[0] * t_); // [m]
+    // double offset_x = 0.05 * cos(2.0 * M_PI * f_[0] * t_); // [m]
     // double offset_y = 0.0; // [m]
-    // double offset_z = 0.1 * sin(2.0 * M_PI * f_[1] * t_); // [m]
+    // double offset_z = 0.05 * sin(2.0 * M_PI * f_[1] * t_); // [m]
     // double offset_thx = 0.0; // [rad]
     // double offset_thy = 0.0; // [rad]
     // double offset_thz = 0.0; // [rad]
@@ -231,8 +220,7 @@ public:
     std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
     std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
 
-    // joint_angles_cmd_ = theta_sol_;
-    joint_angles_cmd_ = VectorXd::Zero(n_); // Keep arm static
+    joint_angles_cmd_ = theta_sol_;
   }
 
   void solveFK()
