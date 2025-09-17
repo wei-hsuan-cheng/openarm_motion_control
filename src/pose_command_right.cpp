@@ -14,12 +14,12 @@
 using RM = RMUtils;
 using std::placeholders::_1;
 
-class JointCommand : public rclcpp::Node {
+class PoseCommandRight : public rclcpp::Node {
 public:
-  JointCommand() : rclcpp::Node("joint_command") 
+  PoseCommandRight() : rclcpp::Node("pose_command_right") 
   {
     // Init project
-    RCLCPP_INFO(get_logger(), "Starting [JointCommand]. . .");
+    RCLCPP_INFO(get_logger(), "Starting [PoseCommandRight]. . .");
     // Load ROS 2 parameters from yaml file
     loadYAMLParams();
     // Init
@@ -129,8 +129,18 @@ public:
 
   void initRobotControl()
   {
-    joint_angles_cmd_ = VectorXd::Zero(n_);
+    pos_quat_b_e_cmd_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
     gripper_pos_cmd_ = 0.0;
+    theta_sol_ = VectorXd::Zero(n_); // Temp IK solution
+    joint_angles_cmd_ = VectorXd::Zero(n_); // Joint command to the robot
+
+    // IK initial guess
+    theta_sol_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
+    joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
+
+    // theta_sol_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
+    // joint_angles_cmd_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
+
     pos_quat_b_e_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
   }
 
@@ -155,7 +165,7 @@ public:
     timer_period_ = std::chrono::duration<double>(Ts_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period_),
-      std::bind(&JointCommand::timerCallback, this)
+      std::bind(&PoseCommandRight::timerCallback, this)
     );
 
     // -------- Record start time --------
@@ -167,24 +177,73 @@ public:
     return this->get_clock()->now(); 
   }
 
-  void getJointCommand()
+  void getPoseCommand()
   {
-    // // θ(t) = q0 + A ⊙ sin(2π f t + φ)
-    // for (int i = 0; i < n_; ++i) {
-    //   joint_angles_cmd_(i) = q0_[i] + A_[i] * std::sin(2.0 * M_PI * f_[i] * t_ + phi_[i]);
-    // }
-
     // Ground-truth nominal (centroid) pose
-    // Joints: [-0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693]
-    // Translation: [0.25, 0.0, 0.25]
-    // Rotation: in Quaternion [0.392847, 0.587938, 0.587938, 0.392847] // (w,x,y,z)
-    joint_angles_cmd_ << -0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693;
+    // Joints: [-0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909]
+    // Translation: [0.324, 0.184, 0.062]
+    // Rotation: in Quaternion [0.075, -0.195, 0.925, 0.318] // (w,x,y,z)
+    pos_quat_b_e_cmd_.pos = Vector3d(0.324, 0.184, 0.062); // [m]
+    pos_quat_b_e_cmd_.quat = Quaterniond(0.075, -0.195, 0.925, 0.318); // (w,x,y,z)
+
+    // // Ground-truth nominal (centroid) pose
+    // // Joints: [-0.211391,-0.551581,0.646578,2.01463,1.34623,0.253216,0.5693]
+    // // Translation: [0.25, 0.0, 0.25]
+    // // Rotation: in Quaternion [0.392847, 0.587938, 0.587938, 0.392847] // (w,x,y,z)
+
+    // pos_quat_b_e_cmd_.pos = Vector3d(0.25, 0.0, 0.25); // [m]
+    // pos_quat_b_e_cmd_.quat = RM::zyxEuler2Quat(Vector3d(M_PI/2.0, 0.0, M_PI/2.0 + M_PI/8.0)); // (w,x,y,z)
+
+    // // Time varying pose command
+    // double offset_x = 0.1 * cos(2.0 * M_PI * f_[0] * t_); // [m]
+    // double offset_y = 0.0; // [m]
+    // double offset_z = 0.1 * sin(2.0 * M_PI * f_[1] * t_); // [m]
+    // double offset_thx = 0.0; // [rad]
+    // double offset_thy = 0.0; // [rad]
+    // double offset_thz = 0.0; // [rad]
+
+    // PosQuat pos_quat_offset = PosQuat(Vector3d(offset_x, offset_y, offset_z), 
+    //                                   RM::zyxEuler2Quat(Vector3d(offset_thz, offset_thy, offset_thx)));
+    // pos_quat_b_e_cmd_ = RM::TransformPosQuats({pos_quat_b_e_cmd_, pos_quat_offset});
+  }
+
+  void solveIK()
+  {
+    // === Solve IK problem ===
+    theta_sol_ = joint_angles_cmd_;
+    const double eomg = 1e-7;      // orientation tol (‖ω‖) [rad]
+    const double ev   = 1e-7;      // position tol (‖v‖) [m]
+    int cur_iter = 0; // current iteration (for debugging)
+    const int    max_iter = 200;
+    const double lambda   = 1e-2;  // DLS damping (set 0.0 to disable)
+    const double step_clip = 0.0;  // set >0.0 (e.g., 0.2) to cap per-step |Δθ|
+    const bool   wrap_pi   = true;
+
+    auto t_start = std::chrono::high_resolution_clock::now();
+    bool ok = RM::IKNum(screws_, pos_quat_b_e_cmd_, theta_sol_, cur_iter, eomg, ev, max_iter, lambda, step_clip, wrap_pi);
+    auto t_end   = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed_ms = t_end - t_start;
+
+    std::cout << "\n-- IK target pose pos_quat_b_e_cmd_ -->\n";
+    std::cout << "pos [m]: " << pos_quat_b_e_cmd_.pos.transpose() << "\n";
+    std::cout << "quat (w,x,y,z): " << pos_quat_b_e_cmd_.quat.w() << ", " << pos_quat_b_e_cmd_.quat.x() << ", " << pos_quat_b_e_cmd_.quat.y() << ", " << pos_quat_b_e_cmd_.quat.z() << "\n";
+    std::cout << "-- IK success -->\n" << (ok ? "[SUCCEEDED]" : "[FAILED]") << "\n";
+    std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
+    std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
+
+    // joint_angles_cmd_ = theta_sol_;
+    joint_angles_cmd_ = VectorXd::Zero(n_); // Keep arm static
   }
 
   void solveFK()
   {
     // Compute FK with PoE and publish EE pose w.r.t. base
     pos_quat_b_e_ = RM::FKPoE(screws_, joint_angles_cmd_);
+
+    // std::cout << "\n-- FK result pose pos_quat_b_e_ -->\n";
+    // std::cout << "pos [m]: " << pos_quat_b_e_.pos.transpose() << "\n";
+    // std::cout << "quat (w,x,y,z): " << pos_quat_b_e_.quat.w() << ", " << pos_quat_b_e_.quat.x() << ", " << pos_quat_b_e_.quat.y() << ", " << pos_quat_b_e_.quat.z() << "\n";
+
   }
 
   void gripperControl()
@@ -193,14 +252,14 @@ public:
     // Time-varying gripper command
     gripper_pos_cmd_ = 0.5 * (1.0 + sin(2.0 * M_PI * f_[0] * t_)) * gripper_pos_max; // normalized position
   }
-
+  
   void publishStates()
   {
     // Publish joint angles (including gripper position)
     sensor_msgs::msg::JointState js;
     js.header.stamp = now_time();
     js.name = joint_names_;
-    js.name.push_back("openarm_finger_joint1");
+    js.name.push_back("openarm_right_finger_joint1");
     js.position.resize(n_ + 1);
     for (int i = 0; i < n_; ++i) js.position[i] = joint_angles_cmd_(i);
     js.position[n_] = gripper_pos_cmd_;
@@ -224,7 +283,8 @@ private:
   void timerCallback() 
   {
     t_ = (now_time() - start_time_).seconds();
-    getJointCommand();
+    getPoseCommand();
+    solveIK();
     solveFK();
     gripperControl();
     publishStates();
@@ -237,7 +297,7 @@ private:
   int num_joints_param_{0}, n_{0};
   std::vector<double> M_pos_, M_qwxyz_;
 
-  double fs_{200.0};
+  double fs_;
   double Ts_;
   double t_;
   std::vector<double> q0_, A_, f_, phi_;
@@ -247,6 +307,8 @@ private:
   MatrixXd S_;
   PosQuat M_;
   ScrewList screws_;
+  PosQuat pos_quat_b_e_cmd_;
+  VectorXd theta_sol_;
   VectorXd joint_angles_cmd_;
   double gripper_pos_cmd_;
   PosQuat pos_quat_b_e_;
@@ -260,7 +322,7 @@ private:
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<JointCommand>());
+    rclcpp::spin(std::make_shared<PoseCommandRight>());
   } catch (const std::exception& e) {
     std::cerr << "Fatal: " << e.what() << std::endl;
   }

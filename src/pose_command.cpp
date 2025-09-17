@@ -148,7 +148,6 @@ public:
       RCLCPP_FATAL(get_logger(), "Invalid fs parameter: %f", fs_);
       throw std::runtime_error("Bad fs param");
     }
-
     Ts_ = 1.0 / fs_;
     t_ = 0.0;
   }
@@ -274,7 +273,6 @@ private:
   void timerCallback() 
   {
     t_ = (now_time() - start_time_).seconds();
-    
     getPoseCommand();
     solveIK();
     solveFK();
