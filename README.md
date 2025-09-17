@@ -15,6 +15,7 @@ colcon build --packages-select openarm_motion_control && . install/setup.bash
 
 ```bash
 cd ~/ros2_ws
+
 # Visualize in RViz2 with joint_state_publisher_gui
 ros2 launch openarm_motion_control visualize_openarm.launch.py \
 arm_type:=v10 \
