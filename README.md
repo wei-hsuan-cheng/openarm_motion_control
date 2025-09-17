@@ -3,6 +3,7 @@
 ## Installation
 
 This is a ROS 2 Humble package.
+> First download and install the robot_description of *openarm_v10* [here](https://github.com/enactic/openarm_description.git)!!!
 
 ```bash
 cd ~/ros2_ws/src && git clone https://github.com/wei-hsuan-cheng/openarm_motion_control.git
