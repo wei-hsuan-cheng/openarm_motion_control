@@ -15,6 +15,7 @@
 import os
 import yaml
 import xacro
+from typing import List
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -31,6 +32,38 @@ def _load_yaml_dict(path: str) -> dict:
     if not isinstance(data, dict):
         raise RuntimeError(f"YAML at {path} is not a dict at top level.")
     return data
+
+
+def _pose_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
+    """Make a pose_command node from a YAML; preserves your param schema."""
+    params_raw = _load_yaml_dict(yaml_path_abs)
+
+    screw_list_params = {
+        "base_link":            params_raw.get("base_link", ""),
+        "ee_link":              params_raw.get("ee_link", ""),
+        "screw_representation": params_raw.get("screw_representation", "body"),
+        "joint_names":          params_raw.get("joint_names", []),
+        "num_joints":           params_raw.get("num_joints", 0),
+        "screw_list":           params_raw.get("screw_list", {}),
+        "M_position":           params_raw.get("M_position", []),         # list expected
+        "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),  # list expected
+    }
+
+    motion_params = {
+        "fs": 200.0,
+        "offset_rad": [0.0],
+        "amplitude_rad": [0.35],
+        "frequency_hz": [0.1],
+        "phase_rad": [0.0],
+    }
+
+    return Node(
+        package="openarm_motion_control",
+        executable=node_name,
+        name=node_name,
+        output="screen",
+        parameters=[screw_list_params, motion_params],
+    )
 
 
 def robot_state_publisher_spawner(context: LaunchContext, arm_type, ee_type, bimanual):
@@ -52,74 +85,61 @@ def robot_state_publisher_spawner(context: LaunchContext, arm_type, ee_type, bim
         }
     ).toprettyxml(indent="  ")
 
-    return [
-        Node(
-            package="robot_state_publisher",
-            executable="robot_state_publisher",
-            name="robot_state_publisher",
-            output="screen",
-            parameters=[{"robot_description": robot_description}],
-        )
-    ]
+    return [Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        name="robot_state_publisher",
+        output="screen",
+        parameters=[{"robot_description": robot_description}],
+    )]
 
 
 def rviz_spawner(context: LaunchContext, bimanual):
     bimanual_str = context.perform_substitution(bimanual)
-    rviz_config_file = "bimanual.rviz" if bimanual_str.lower() == "true" else "pose_command_single_arm.rviz"
+    rviz_config_file = "pose_command_bimanual.rviz" if bimanual_str.lower() == "true" else "pose_command_single_arm.rviz"
     rviz_config_path = os.path.join(
         get_package_share_directory("openarm_motion_control"),
         "rviz", rviz_config_file
     )
-
-    return [
-        Node(
-            package="rviz2",
-            executable="rviz2",
-            name="rviz2",
-            arguments=["--display-config", rviz_config_path],
-            output="screen",
-        ),
-    ]
+    return [Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        arguments=["--display-config", rviz_config_path],
+        output="screen",
+    )]
 
 
-def pose_command_spawner(context: LaunchContext, yaml_path):
-    # Honor runtime yaml_path
-    yaml_resolved = context.perform_substitution(yaml_path)
-    params_raw = _load_yaml_dict(os.path.expanduser(yaml_resolved))
+def pose_command_spawner(context: LaunchContext, bimanual, yaml_path) -> List[Node]:
+    """
+    If bimanual=false:
+      - spawn one node 'pose_command' using yaml_path (…/openarm_v10_body_screws.yaml)
+    If bimanual=true:
+      - spawn two nodes:
+          * 'pose_command_left'  using DIR/openarm_v10_left_body_screws.yaml
+          * 'pose_command_right' using DIR/openarm_v10_right_body_screws.yaml
+        where DIR is the directory of yaml_path (so you can relocate the set easily).
+    """
+    bimanual_str = context.perform_substitution(bimanual)
+    is_bimanual = (bimanual_str.lower() == "true")
 
-    screw_list_params = {
-        "base_link":            params_raw.get("base_link", ""),
-        "ee_link":              params_raw.get("ee_link", ""),
-        "screw_representation": params_raw.get("screw_representation", "body"),
-        "joint_names":          params_raw.get("joint_names", []),
-        "num_joints":           params_raw.get("num_joints", 0),
-        "screw_list":           params_raw.get("screw_list", {}),
-        "M_position":           params_raw.get("M_position", {}),
-        "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", {}),
-    }
+    yaml_resolved = os.path.expanduser(context.perform_substitution(yaml_path))
+    yaml_dir = os.path.dirname(yaml_resolved)
 
-    # Arrays are required by your node declarations
-    motion_params = {
-        "fs": 200.0,
-        "offset_rad": [0.0],
-        "amplitude_rad": [0.35],
-        "frequency_hz": [0.1],
-        "phase_rad": [0.0],
-    }
+    # single arm
+    if not is_bimanual: 
+        return [_pose_node_from_yaml(yaml_resolved, "pose_command")]
 
-    return [
-        Node(
-            package="openarm_motion_control",
-            executable="pose_command",
-            name="pose_command",
-            output="screen",
-            parameters=[screw_list_params, motion_params],
-        )
-    ]
+    # bimanual: enforce left/right files in the same directory
+    left_yaml  = os.path.join(yaml_dir, "openarm_v10_left_body_screws.yaml")
+    right_yaml = os.path.join(yaml_dir, "openarm_v10_right_body_screws.yaml")
+    left_node  = _pose_node_from_yaml(left_yaml,  "pose_command_left")
+    right_node = _pose_node_from_yaml(right_yaml, "pose_command_right")
+    return [left_node, right_node]
 
 
 def generate_launch_description():
-    # Arguments
+    # Args
     arm_type_arg = DeclareLaunchArgument(
         "arm_type",
         description="Type of arm to visualize (e.g., v10)"
@@ -135,12 +155,14 @@ def generate_launch_description():
         description="Whether to use bimanual configuration"
     )
 
-    default_yaml = os.path.expanduser("~/ros2_ws/openarm_ws/src/openarm_motion_control/screw_lists/openarm_v10_body_screws.yaml")    
-    
+    # Default YAML (single-arm). For bimanual we’ll swap to left/right in the same directory.
+    default_yaml = os.path.expanduser(
+        "~/ros2_ws/openarm_ws/src/openarm_motion_control/screw_lists/openarm_v10_body_screws.yaml"
+    )
     yaml_path_arg = DeclareLaunchArgument(
         "yaml_path",
         default_value=default_yaml,
-        description="Absolute path to openarm screw-list YAML",
+        description="Path to single-arm YAML (its directory will also be used to find the left/right YAMLs when bimanual=true)",
     )
 
     # LaunchConfigurations
@@ -149,7 +171,7 @@ def generate_launch_description():
     bimanual = LaunchConfiguration("bimanual")
     yaml_path = LaunchConfiguration("yaml_path")
 
-    # Spawners as OpaqueFunction so LaunchConfigurations resolve at runtime
+    # Runtime-resolved spawners
     robot_state_publisher_loader = OpaqueFunction(
         function=robot_state_publisher_spawner,
         args=[arm_type, ee_type, bimanual]
@@ -160,7 +182,7 @@ def generate_launch_description():
     )
     pose_command_loader = OpaqueFunction(
         function=pose_command_spawner,
-        args=[yaml_path]
+        args=[bimanual, yaml_path]
     )
 
     return LaunchDescription([

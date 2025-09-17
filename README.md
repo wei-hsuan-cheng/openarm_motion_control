@@ -13,39 +13,19 @@ colcon build --packages-select openarm_motion_control && . install/setup.bash
 
 ## Run Demo
 
-### Single arm
-
 ```bash
 cd ~/ros2_ws
 # Visualize in RViz2 with joint_state_publisher_gui
 ros2 launch openarm_motion_control visualize_openarm.launch.py \
 arm_type:=v10 \
-bimanual:=false
-# ee_type:=none
+bimanual:=true
 
-# Joint space motion
-ros2 launch openarm_motion_control joint_command.launch.py \
-arm_type:=v10 \
-bimanual:=false
-
-# Task space motion
+# Task space motion (IK pose command)
 ros2 launch openarm_motion_control pose_command.launch.py \
 arm_type:=v10 \
-bimanual:=false
-```
-
-### Bimanual
-
-```bash
-cd ~/ros2_ws
-# Visualize in RViz2 with joint_state_publisher_gui
-ros2 launch openarm_motion_control visualize_openarm.launch.py \
-arm_type:=v10 \
 bimanual:=true
-# ee_type:=none
 
-# Task space motion
-ros2 launch openarm_motion_control pose_command_bimanual.launch.py \
-arm_type:=v10 \
-bimanual:=true
+# Arguments:
+# ee_type:=none # if no end-effector
+# bimanual:=false # if single arm
 ```
