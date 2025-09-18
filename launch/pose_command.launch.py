@@ -37,17 +37,47 @@ def _load_yaml_dict(path: str) -> dict:
 def _pose_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
     """Make a pose_command node from a YAML; preserves your param schema."""
     params_raw = _load_yaml_dict(yaml_path_abs)
+    
+    robot_name = params_raw.get("robot_name", "arm")
+    jl = params_raw.get("joint_limits", {})
+    names = params_raw.get("joint_names", [])
+    jl_lower  = []
+    jl_upper  = []
+    jl_vel    = []
+    jl_effort = []
+    for name in names:
+        d = jl.get(name, {})
+        jl_lower.append( float(d.get("lower",  0.0)) )
+        jl_upper.append( float(d.get("upper",  0.0)) )
+        jl_vel.append(   float(d.get("velocity", 0.0)) )
+        jl_effort.append(float(d.get("effort",  0.0)) )
 
     screw_list_params = {
+        "robot_name":           robot_name,
         "base_link":            params_raw.get("base_link", ""),
         "ee_link":              params_raw.get("ee_link", ""),
         "screw_representation": params_raw.get("screw_representation", "body"),
-        "joint_names":          params_raw.get("joint_names", []),
+        "joint_names":          names,
         "num_joints":           params_raw.get("num_joints", 0),
         "screw_list":           params_raw.get("screw_list", {}),
-        "M_position":           params_raw.get("M_position", []),         # list expected
-        "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),  # list expected
+        "joint_limits_lower":   jl_lower,
+        "joint_limits_upper":   jl_upper,
+        "joint_limits_velocity": jl_vel,
+        "joint_limits_effort":  jl_effort,
+        "M_position":           params_raw.get("M_position", []),
+        "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),
     }
+    
+    # screw_list_params = {
+    #     "base_link":            params_raw.get("base_link", ""),
+    #     "ee_link":              params_raw.get("ee_link", ""),
+    #     "screw_representation": params_raw.get("screw_representation", "body"),
+    #     "joint_names":          params_raw.get("joint_names", []),
+    #     "num_joints":           params_raw.get("num_joints", 0),
+    #     "screw_list":           params_raw.get("screw_list", {}),
+    #     "M_position":           params_raw.get("M_position", []),         # list expected
+    #     "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),  # list expected
+    # }
 
     motion_params = {
         "fs": 200.0,

@@ -1,5 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include "robot_math_utils/robot_math_utils_v1_14.hpp"
+#include "robot_math_utils/robot_math_utils_v1_15.hpp"
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -37,11 +37,16 @@ public:
   void loadYAMLParams()
   {
     // -------- Robot config params --------
+    declare_parameter<std::string>("robot_name", "");
     declare_parameter<std::string>("base_link", "");
     declare_parameter<std::string>("ee_link", "");
     declare_parameter<std::string>("screw_representation", "body");
     declare_parameter<std::vector<std::string>>("joint_names", {});
     declare_parameter<int>("num_joints", 0);
+    declare_parameter<std::vector<double>>("joint_limits_lower",   {});
+    declare_parameter<std::vector<double>>("joint_limits_upper",   {});
+    declare_parameter<std::vector<double>>("joint_limits_velocity",{});
+    declare_parameter<std::vector<double>>("joint_limits_effort",  {});
     declare_parameter<std::vector<double>>("M_position", {});        // [x,y,z]
     declare_parameter<std::vector<double>>("M_quaternion_wxyz", {}); // [w,x,y,z]
 
@@ -56,6 +61,7 @@ public:
   void initRobotConfig()
   {
     // -------- Robot config params --------
+    get_parameter("robot_name", robot_name_);
     get_parameter("base_link", base_link_);
     get_parameter("ee_link", ee_link_);
     get_parameter("screw_representation", rep_);
@@ -75,6 +81,45 @@ public:
     if (num_joints_param_ != 0 && num_joints_param_ != n_) {
       RCLCPP_WARN(get_logger(), "num_joints (%d) != joint_names.size() (%d). Using %d.", num_joints_param_, n_, n_);
     }
+
+    // Extract joint limits
+    // --- NEW: fetch joint limits arrays and pack to n×4 matrix [ll, ul, v, e] ---
+    std::vector<double> jl_lower, jl_upper, jl_vel, jl_eff;
+    get_parameter("joint_limits_lower",    jl_lower);
+    get_parameter("joint_limits_upper",    jl_upper);
+    get_parameter("joint_limits_velocity", jl_vel);
+    get_parameter("joint_limits_effort",   jl_eff);
+
+    // size checks (warn + pad/truncate to n_)
+    auto fix_size = [&](std::vector<double>& v, const char* name){
+      if ((int)v.size() != n_) {
+        RCLCPP_WARN(get_logger(), "%s size %zu != n (%d). Resizing.", name, v.size(), n_);
+        v.resize(n_, 0.0);
+      }
+    };
+    fix_size(jl_lower, "joint_limits_lower");
+    fix_size(jl_upper, "joint_limits_upper");
+    fix_size(jl_vel,   "joint_limits_velocity");
+    fix_size(jl_eff,   "joint_limits_effort");
+
+    joint_limits_.resize(n_, 4);
+    for (int i = 0; i < n_; ++i) {
+      joint_limits_(i, 0) = jl_lower[i];
+      joint_limits_(i, 1) = jl_upper[i];
+      joint_limits_(i, 2) = jl_vel[i];
+      joint_limits_(i, 3) = jl_eff[i];
+    }
+
+    // Print joint limits
+    std::cout << "\n-- Left arm joint limits [ll, ul, vel, eff] [rad, rad, rad/s, Nm] -->\n";
+    for (int i = 0; i < n_; ++i) {
+      std::cout << "  " << joint_names_[i] << ": ["
+                << joint_limits_(i,0) << ", "
+                << joint_limits_(i,1) << ", "
+                << joint_limits_(i,2) << ", "
+                << joint_limits_(i,3) << "]\n";
+    }
+    std::cout << std::endl;
 
     // Validate home pose
     if (M_pos_.size() != 3 || M_qwxyz_.size() != 4) {
@@ -100,6 +145,16 @@ public:
     
     // Init ScrewList object
     screws_ = ScrewList(S_, M_);
+    screws_.setMeta(
+      robot_name_,
+      ScrewList::ParseRep(rep_),
+      joint_names_,
+      base_link_.empty() ? "base_link" : base_link_,
+      ee_link_.empty()   ? "ee_link"   : ee_link_,
+      joint_limits_
+    );
+    // Print screw list
+    screws_.PrintList();
   }
 
   void initMotionParams() 
@@ -195,7 +250,7 @@ public:
     // Translation: [0.324, 0.093, 0.515]
     // Rotation: in Quaternion [-0.085, -0.191, 0.879, -0.429] // (w,x,y,z)
 
-    pos_quat_b_e_cmd_.pos = Vector3d(0.32, 0.15, 0.51); // [m]
+    pos_quat_b_e_cmd_.pos = Vector3d(0.25, 0.15, 0.5); // [m]
     pos_quat_b_e_cmd_.quat = Quaterniond(-0.085, -0.191, 0.879, -0.429); // (w,x,y,z)
 
     // Time varying pose command
@@ -300,7 +355,7 @@ private:
 
 
   // Params / state
-  std::string base_link_, ee_link_, rep_;
+  std::string robot_name_, base_link_, ee_link_, rep_;
   std::vector<std::string> joint_names_;
   int num_joints_param_{0}, n_{0};
   std::vector<double> M_pos_, M_qwxyz_;
@@ -313,6 +368,7 @@ private:
   rclcpp::Time start_time_;
 
   MatrixXd S_;
+  MatrixXd joint_limits_; // n x 4: [ll, ul, v, e]
   PosQuat M_;
   ScrewList screws_;
   PosQuat pos_quat_b_e_cmd_;

@@ -1,3 +1,4 @@
+robot_name: openarm
 base_link: openarm_body_link0
 ee_link: openarm_left_hand
 screw_representation: body  # space or body
@@ -11,5 +12,13 @@ screw_list:
   openarm_left_joint5: [0.0045000000, 0.0000010000, 0.0000000000, 0.0000000000, 0.0000000000, 1.0000000000]
   openarm_left_joint6: [0.0000000000, -0.1001000000, -0.0045000000, 1.0000000000, 0.0000000000, 0.0000000000]
   openarm_left_joint7: [-0.1001000000, 0.0000000000, 0.0000010000, 0.0000000000, -1.0000000000, -0.0000000000]
+joint_limits:
+  openarm_left_joint1: { lower: -3.4906590000, upper: 1.3962630000, velocity: 16.7546660000, effort: 40.0000000000 }
+  openarm_left_joint2: { lower: -3.3161253268, upper: 0.1745326732, velocity: 16.7546660000, effort: 40.0000000000 }
+  openarm_left_joint3: { lower: -1.5707960000, upper: 1.5707960000, velocity: 5.4454260000, effort: 27.0000000000 }
+  openarm_left_joint4: { lower: 0.0000000000, upper: 2.4434610000, velocity: 5.4454260000, effort: 27.0000000000 }
+  openarm_left_joint5: { lower: -1.5707960000, upper: 1.5707960000, velocity: 20.9439460000, effort: 7.0000000000 }
+  openarm_left_joint6: { lower: -0.7853980000, upper: 0.7853980000, velocity: 20.9439460000, effort: 7.0000000000 }
+  openarm_left_joint7: { lower: -1.5707960000, upper: 1.5707960000, velocity: 20.9439460000, effort: 7.0000000000 }
 M_position: [0.0000010000, 0.1579980308, 0.1618995335]
 M_quaternion_wxyz: [0.0000018366, 1.0000000000, 0.0000000000, 0.0000000000]
