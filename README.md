@@ -20,13 +20,10 @@ cd ~/ros2_ws
 ros2 launch openarm_motion_control visualize_openarm.launch.py \
 arm_type:=v10 \
 bimanual:=true
-
-# Task space motion (IK pose command)
-ros2 launch openarm_motion_control pose_command.launch.py \
-arm_type:=v10 \
-bimanual:=true
-
 # Arguments:
 # ee_type:=none # if no end-effector
 # bimanual:=false # if single arm
+
+# Bimanual task space motion (IK pose command)
+ros2 launch openarm_motion_control pose_command.launch.py
 ```

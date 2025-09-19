@@ -67,17 +67,6 @@ def _pose_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
         "M_position":           params_raw.get("M_position", []),
         "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),
     }
-    
-    # screw_list_params = {
-    #     "base_link":            params_raw.get("base_link", ""),
-    #     "ee_link":              params_raw.get("ee_link", ""),
-    #     "screw_representation": params_raw.get("screw_representation", "body"),
-    #     "joint_names":          params_raw.get("joint_names", []),
-    #     "num_joints":           params_raw.get("num_joints", 0),
-    #     "screw_list":           params_raw.get("screw_list", {}),
-    #     "M_position":           params_raw.get("M_position", []),         # list expected
-    #     "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),  # list expected
-    # }
 
     motion_params = {
         "fs": 200.0,
@@ -172,6 +161,7 @@ def generate_launch_description():
     # Args
     arm_type_arg = DeclareLaunchArgument(
         "arm_type",
+        default_value="v10",
         description="Type of arm to visualize (e.g., v10)"
     )
     ee_type_arg = DeclareLaunchArgument(
@@ -181,7 +171,7 @@ def generate_launch_description():
     )
     bimanual_arg = DeclareLaunchArgument(
         "bimanual",
-        default_value="false",
+        default_value="true",
         description="Whether to use bimanual configuration"
     )
 
