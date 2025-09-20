@@ -22,7 +22,6 @@ def _load_yaml_dict(path: str) -> dict:
 
 def _node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
     params_raw = _load_yaml_dict(yaml_path_abs)
-    
     robot_name = params_raw.get("robot_name", "arm")
     jl = params_raw.get("joint_limits", {})
     names = params_raw.get("joint_names", [])
@@ -57,7 +56,7 @@ def _node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
         "fs": 200.0,
         "offset_rad": [0.0],
         "amplitude_rad": [0.35],
-        "frequency_hz": [0.02],
+        "frequency_hz": [0.05],
         "phase_rad": [0.0],
     }
 
@@ -69,7 +68,7 @@ def _node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
         parameters=[screw_list_params, motion_params],
     )
 
-def _jpc_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
+def _pc_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
     params_raw = _load_yaml_dict(yaml_path_abs)
     
     robot_name = params_raw.get("robot_name", "arm")
@@ -164,14 +163,19 @@ def pose_command_spawner(context: LaunchContext) -> List[Node]:
     right_node = _node_from_yaml(right_yaml, "pose_visualization_right")
     return [left_node, right_node]
 
-def joint_position_control_spawner(context: LaunchContext) -> List[Node]:
+def pose_control_spawner(context: LaunchContext) -> List[Node]:
     yaml_dir = os.path.join(
         get_package_share_directory("openarm_motion_control"),
     )
     left_yaml = yaml_dir + "/screw_lists/openarm_v10_left_body_screws.yaml"
 
-    jpc  = _jpc_node_from_yaml(left_yaml,  "joint_position_control")
-    return [jpc]
+    # Joint Position Control
+    jpc  = _pc_node_from_yaml(left_yaml,  "joint_position_control")
+    # Pose Control
+    pc  = _pc_node_from_yaml(left_yaml,  "pose_control")
+    
+    # return [jpc]
+    return [pc]
 
 def generate_launch_description():
     # Args
@@ -209,8 +213,8 @@ def generate_launch_description():
         function=pose_command_spawner,
         args=[]
     )
-    joint_position_control_loader = OpaqueFunction(
-        function=joint_position_control_spawner,
+    pose_control_loader = OpaqueFunction(
+        function=pose_control_spawner,
         args=[]
     )
 
@@ -221,5 +225,5 @@ def generate_launch_description():
         robot_state_publisher_loader,
         rviz_loader,
         pose_command_loader,
-        joint_position_control_loader,
+        pose_control_loader,
     ])

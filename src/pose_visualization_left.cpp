@@ -112,17 +112,6 @@ public:
       joint_limits_(i, 3) = jl_eff[i];
     }
 
-    // Print joint limits
-    std::cout << "\n-- Left arm joint limits [ll, ul, vel, eff] [rad, rad, rad/s, Nm] -->\n";
-    for (int i = 0; i < n_; ++i) {
-      std::cout << "  " << joint_names_[i] << ": ["
-                << joint_limits_(i,0) << ", "
-                << joint_limits_(i,1) << ", "
-                << joint_limits_(i,2) << ", "
-                << joint_limits_(i,3) << "]\n";
-    }
-    std::cout << std::endl;
-
     // Validate home pose
     if (M_pos_.size() != 3 || M_qwxyz_.size() != 4) {
       RCLCPP_FATAL(get_logger(), "M_position must be length 3 and M_quaternion_wxyz length 4 (w,x,y,z).");

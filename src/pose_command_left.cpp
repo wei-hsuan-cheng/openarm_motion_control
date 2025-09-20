@@ -261,8 +261,8 @@ public:
     // Time varying pose command
     // double r = 0.175; // [m]
     double r = 0.1; // [m]
-    // double offset_x = r * cos(2.0 * M_PI * f_[0] * t_); // [m]
-    double offset_x = 0.0; // [m]
+    double offset_x = r * cos(2.0 * M_PI * f_[0] * t_); // [m]
+    // double offset_x = 0.0; // [m]
     double offset_y = 0.0; // [m]
     double offset_z = r * sin(2.0 * M_PI * f_[1] * t_); // [m]
     double offset_thx = 0.0; // [rad]
