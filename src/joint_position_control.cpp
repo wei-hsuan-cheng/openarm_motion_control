@@ -194,13 +194,13 @@ private:
     qd_  = qd_.cwiseMax(-vl).cwiseMin(vl);
     q_  += qd_ * Ts_;
 
-    // Debug (optional)
-    std::cout << "\nqe = [";
-    for (int i = 0; i < n_; ++i) {
-      std::cout << qe(i);
-      if (i < n_-1) std::cout << ", ";
-    }
-    std::cout << "]\n" << std::flush;
+    // // Debug (optional)
+    // std::cout << "\nqe = [";
+    // for (int i = 0; i < n_; ++i) {
+    //   std::cout << qe(i);
+    //   if (i < n_-1) std::cout << ", ";
+    // }
+    // std::cout << "]\n" << std::flush;
 
     // Publish measured joints (convert Eigen → std::vector)
     sensor_msgs::msg::JointState js;

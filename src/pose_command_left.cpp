@@ -259,8 +259,8 @@ public:
     pos_quat_b_e_cmd_.quat = Quaterniond(-0.085, -0.191, 0.879, -0.429); // (w,x,y,z)
 
     // Time varying pose command
-    // double r = 0.175; // [m]
-    double r = 0.1; // [m]
+    double r = 0.175; // [m]
+    // double r = 0.1; // [m]
     double offset_x = r * cos(2.0 * M_PI * f_[0] * t_); // [m]
     // double offset_x = 0.0; // [m]
     double offset_y = 0.0; // [m]
