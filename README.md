@@ -13,20 +13,25 @@ colcon build --packages-select openarm_motion_control && . install/setup.bash
 
 ## Run Demo
 
-```bash
-cd ~/ros2_ws
+- Visualize in RViz2 with joint_state_publisher_gui
+    ```bash
+    ros2 launch openarm_motion_control visualize_openarm.launch.py \
+    arm_type:=v10 \
+    bimanual:=true
+    # Arguments:
+    # ee_type:=none # if no end-effector
+    # bimanual:=false # if single arm
+    ```
 
-# Visualize in RViz2 with joint_state_publisher_gui
-ros2 launch openarm_motion_control visualize_openarm.launch.py \
-arm_type:=v10 \
-bimanual:=true
-# Arguments:
-# ee_type:=none # if no end-effector
-# bimanual:=false # if single arm
+- Bimanual task space motion
+    ```bash
+    # Visualize FK/IK
+    ros2 launch openarm_motion_control pose_visualization.launch.py
 
-# Bimanual task space motion (IK pose commands for both arms)
-ros2 launch openarm_motion_control pose_command.launch.py
-```
+    # Simulate robot motion control
+    ros2 launch openarm_motion_control pose_control.launch.py
+    ```
+
 Then you will see the following visualization in `rviz2`:
 <p align="center">
     <img src="assets/openarm_bimanual_demo.gif" alt="OpenArm Bimanual Demo" width="400"/>

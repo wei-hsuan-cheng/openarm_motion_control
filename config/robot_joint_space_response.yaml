@@ -1,0 +1,24 @@
+robot_joint_space_response:
+  ros__parameters:
+    joint_names: ["joint1","joint2","joint3","joint4","joint5","joint6","joint7"]  # arm
+    enable_gripper: true
+    gripper_name: "openarm_left_finger_joint1"
+
+    fs: 500.0
+    kp: 20.0                   # or kp_vec: [ ... 8 elems if gripper enabled ]
+    a: 40.0                    # or a_vec:  [ ... 8 elems ]
+
+    vel_limits: [2,2,2,2,2,2,2,1.5]        # include gripper if enabled
+    acc_limits: [80,80,80,80,80,80,80,200] # gripper can be faster
+
+    q_init:  [0,0,0,0,0,0,0,0]
+    qd_init: [0,0,0,0,0,0,0,0]
+
+    cmd_topic: "/joint_commands"
+    pub_topic: "/joint_states"
+
+    enable_noise: false
+    noise_std: 0.0003
+
+    log_every_sec: true
+    log_period_sec: 2.0

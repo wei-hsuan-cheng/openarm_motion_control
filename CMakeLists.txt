@@ -23,6 +23,7 @@ find_package(Eigen3 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 
 # Dependencies list
@@ -35,6 +36,7 @@ set(dependencies
     tf2_ros
     sensor_msgs
     visualization_msgs
+    geometry_msgs
 )
 
 # For ROS 2 action
@@ -48,34 +50,30 @@ include_directories(
 )
 
 # Source files
-set(LOAD_SCREW_LIST_SOURCES src/load_screw_list.cpp)
-set(JOINT_COMMAND_SOURCES src/joint_command.cpp)
-set(POSE_COMMAND_SOURCES src/pose_command.cpp)
+set(POSE_VISUALIZATION_LEFT_SOURCES src/pose_visualization_left.cpp)
+set(POSE_VISUALIZATION_RIGHT_SOURCES src/pose_visualization_right.cpp)
+set(JOINT_POSITION_CONTROL_SOURCES src/joint_position_control.cpp)
 set(POSE_COMMAND_LEFT_SOURCES src/pose_command_left.cpp)
-set(POSE_COMMAND_RIGHT_SOURCES src/pose_command_right.cpp)
 
 # Add executables
-add_executable(load_screw_list ${LOAD_SCREW_LIST_SOURCES})
-add_executable(joint_command ${JOINT_COMMAND_SOURCES})
-add_executable(pose_command ${POSE_COMMAND_SOURCES})
+add_executable(pose_visualization_left ${POSE_VISUALIZATION_LEFT_SOURCES})
+add_executable(pose_visualization_right ${POSE_VISUALIZATION_RIGHT_SOURCES})
+add_executable(joint_position_control ${JOINT_POSITION_CONTROL_SOURCES})
 add_executable(pose_command_left ${POSE_COMMAND_LEFT_SOURCES})
-add_executable(pose_command_right ${POSE_COMMAND_RIGHT_SOURCES})
 
 # Link libraries
-ament_target_dependencies(load_screw_list ${dependencies})
-ament_target_dependencies(joint_command ${dependencies})
-ament_target_dependencies(pose_command ${dependencies})
+ament_target_dependencies(pose_visualization_left ${dependencies})
+ament_target_dependencies(pose_visualization_right ${dependencies})
+ament_target_dependencies(joint_position_control ${dependencies})
 ament_target_dependencies(pose_command_left ${dependencies})
-ament_target_dependencies(pose_command_right ${dependencies})
 
 # Install targets
 install(TARGETS
-  load_screw_list
-  joint_command
-  pose_command
+  pose_visualization_left
+  pose_visualization_right
+  joint_position_control
   pose_command_left
-  pose_command_right
-  
+
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -85,7 +83,7 @@ install(DIRECTORY
 )
 
 install(
-  DIRECTORY launch screw_lists rviz
+  DIRECTORY launch screw_lists rviz config
   DESTINATION share/${PROJECT_NAME}
 )
 

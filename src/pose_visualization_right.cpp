@@ -14,12 +14,12 @@
 using RM = RMUtils;
 using std::placeholders::_1;
 
-class PoseCommandRight : public rclcpp::Node {
+class PoseVisualizationRight : public rclcpp::Node {
 public:
-  PoseCommandRight() : rclcpp::Node("pose_command_right") 
+  PoseVisualizationRight() : rclcpp::Node("pose_visualization_right") 
   {
     // Init project
-    RCLCPP_INFO(get_logger(), "Starting [PoseCommandRight]. . .");
+    RCLCPP_INFO(get_logger(), "Starting [PoseVisualizationRight]. . .");
     // Load ROS 2 parameters from yaml file
     loadYAMLParams();
     // Init
@@ -217,7 +217,7 @@ public:
     timer_period_ = std::chrono::duration<double>(Ts_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period_),
-      std::bind(&PoseCommandRight::timerCallback, this)
+      std::bind(&PoseVisualizationRight::timerCallback, this)
     );
 
     // -------- Record start time --------
@@ -284,18 +284,19 @@ public:
     auto t_end   = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_ms = t_end - t_start;
 
-    if (everyTimeInterval(2.0))
-    {
-      std::cout << "\n===== Right arm pose command =====\n";
-      std::cout << "-- IK target pose pos_quat_b_e_cmd_ [m, quat_wxyz] -->\n" 
-        << pos_quat_b_e_cmd_.pos.x() << ", " << pos_quat_b_e_cmd_.pos.y() << ", " << pos_quat_b_e_cmd_.pos.z() << ", " 
-        << pos_quat_b_e_cmd_.quat.w() << ", " << pos_quat_b_e_cmd_.quat.x() << ", " << pos_quat_b_e_cmd_.quat.y() << ", " << pos_quat_b_e_cmd_.quat.z() << "\n";
-      std::cout << "-- IK success -->\n" << (ok ? "[SUCCEEDED]" : "[FAILED]") << "\n";
-      std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
-      std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
-    }
+    // if (everyTimeInterval(2.0))
+    // {
+    //   std::cout << "\n===== Right arm pose command =====\n";
+    //   std::cout << "-- IK target pose pos_quat_b_e_cmd_ [m, quat_wxyz] -->\n" 
+    //     << pos_quat_b_e_cmd_.pos.x() << ", " << pos_quat_b_e_cmd_.pos.y() << ", " << pos_quat_b_e_cmd_.pos.z() << ", " 
+    //     << pos_quat_b_e_cmd_.quat.w() << ", " << pos_quat_b_e_cmd_.quat.x() << ", " << pos_quat_b_e_cmd_.quat.y() << ", " << pos_quat_b_e_cmd_.quat.z() << "\n";
+    //   std::cout << "-- IK success -->\n" << (ok ? "[SUCCEEDED]" : "[FAILED]") << "\n";
+    //   std::cout << "-- theta_sol_ [rad] -->\n" << theta_sol_.transpose() << "\n";
+    //   std::cout << "-- IK computation iteration/time/rate [idx, ms, Hz] -->\n" << cur_iter << ", " << elapsed_ms.count() << ", " << (1000.0 / elapsed_ms.count()) << std::endl;
+    // }
 
-    joint_angles_cmd_ = theta_sol_;
+    // joint_angles_cmd_ = theta_sol_;
+    joint_angles_cmd_ = VectorXd::Zero(n_); // Disable IK and hold at zero for testing
   }
 
   void solveFK()
@@ -313,7 +314,8 @@ public:
   {
     double gripper_pos_max = 0.044; // [m]
     // Time-varying gripper command
-    gripper_pos_cmd_ = 0.5 * (1.0 + sin(2.0 * M_PI * f_[0] * t_)) * gripper_pos_max; // normalized position
+    // gripper_pos_cmd_ = 0.5 * (1.0 + sin(2.0 * M_PI * f_[0] * t_)) * gripper_pos_max; // normalized position
+    gripper_pos_cmd_ = gripper_pos_max * 0.5;
   }
   
   void publishStates()
@@ -386,7 +388,7 @@ private:
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<PoseCommandRight>());
+    rclcpp::spin(std::make_shared<PoseVisualizationRight>());
   } catch (const std::exception& e) {
     std::cerr << "Fatal: " << e.what() << std::endl;
   }

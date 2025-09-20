@@ -1,17 +1,3 @@
-# Copyright 2025 Enactic, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import os
 import yaml
 import xacro
@@ -113,9 +99,8 @@ def robot_state_publisher_spawner(context: LaunchContext, arm_type, ee_type, bim
     )]
 
 
-def rviz_spawner(context: LaunchContext, bimanual):
-    bimanual_str = context.perform_substitution(bimanual)
-    rviz_config_file = "pose_command_bimanual.rviz" if bimanual_str.lower() == "true" else "pose_command_single_arm.rviz"
+def rviz_spawner(context: LaunchContext):
+    rviz_config_file = "pose_visualization_bimanual.rviz"
     rviz_config_path = os.path.join(
         get_package_share_directory("openarm_motion_control"),
         "rviz", rviz_config_file
@@ -129,31 +114,14 @@ def rviz_spawner(context: LaunchContext, bimanual):
     )]
 
 
-def pose_command_spawner(context: LaunchContext, bimanual, yaml_path) -> List[Node]:
-    """
-    If bimanual=false:
-      - spawn one node 'pose_command' using yaml_path (…/openarm_v10_body_screws.yaml)
-    If bimanual=true:
-      - spawn two nodes:
-          * 'pose_command_left'  using DIR/openarm_v10_left_body_screws.yaml
-          * 'pose_command_right' using DIR/openarm_v10_right_body_screws.yaml
-        where DIR is the directory of yaml_path (so you can relocate the set easily).
-    """
-    bimanual_str = context.perform_substitution(bimanual)
-    is_bimanual = (bimanual_str.lower() == "true")
-
-    yaml_resolved = os.path.expanduser(context.perform_substitution(yaml_path))
-    yaml_dir = os.path.dirname(yaml_resolved)
-
-    # single arm
-    if not is_bimanual: 
-        return [_pose_node_from_yaml(yaml_resolved, "pose_command")]
-
-    # bimanual: enforce left/right files in the same directory
-    left_yaml  = os.path.join(yaml_dir, "openarm_v10_left_body_screws.yaml")
-    right_yaml = os.path.join(yaml_dir, "openarm_v10_right_body_screws.yaml")
-    left_node  = _pose_node_from_yaml(left_yaml,  "pose_command_left")
-    right_node = _pose_node_from_yaml(right_yaml, "pose_command_right")
+def pose_command_spawner(context: LaunchContext) -> List[Node]:
+    yaml_dir = os.path.join(
+        get_package_share_directory("openarm_motion_control"),
+    )
+    left_yaml = yaml_dir + "/screw_lists/openarm_v10_left_body_screws.yaml"
+    right_yaml = yaml_dir + "/screw_lists/openarm_v10_right_body_screws.yaml"
+    left_node  = _pose_node_from_yaml(left_yaml,  "pose_visualization_left")
+    right_node = _pose_node_from_yaml(right_yaml, "pose_visualization_right")
     return [left_node, right_node]
 
 
@@ -175,21 +143,10 @@ def generate_launch_description():
         description="Whether to use bimanual configuration"
     )
 
-    # Default YAML (single-arm). For bimanual we’ll swap to left/right in the same directory.
-    default_yaml = os.path.expanduser(
-        "~/ros2_ws/openarm_ws/src/openarm_motion_control/screw_lists/openarm_v10_body_screws.yaml"
-    )
-    yaml_path_arg = DeclareLaunchArgument(
-        "yaml_path",
-        default_value=default_yaml,
-        description="Path to single-arm YAML (its directory will also be used to find the left/right YAMLs when bimanual=true)",
-    )
-
     # LaunchConfigurations
     arm_type = LaunchConfiguration("arm_type")
     ee_type = LaunchConfiguration("ee_type")
-    bimanual = LaunchConfiguration("bimanual")
-    yaml_path = LaunchConfiguration("yaml_path")
+    bimanual = LaunchConfiguration("bimanual")    
 
     # Runtime-resolved spawners
     robot_state_publisher_loader = OpaqueFunction(
@@ -198,18 +155,17 @@ def generate_launch_description():
     )
     rviz_loader = OpaqueFunction(
         function=rviz_spawner,
-        args=[bimanual]
+        args=[]
     )
     pose_command_loader = OpaqueFunction(
         function=pose_command_spawner,
-        args=[bimanual, yaml_path]
+        args=[]
     )
 
     return LaunchDescription([
         arm_type_arg,
         ee_type_arg,
         bimanual_arg,
-        yaml_path_arg,
         robot_state_publisher_loader,
         rviz_loader,
         pose_command_loader,

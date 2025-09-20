@@ -16,12 +16,12 @@
 using RM = RMUtils;
 using std::placeholders::_1;
 
-class PoseCommandLeft : public rclcpp::Node {
+class PoseVisualizationLeft : public rclcpp::Node {
 public:
-  PoseCommandLeft() : rclcpp::Node("pose_command_left") 
+  PoseVisualizationLeft() : rclcpp::Node("pose_visualization_left") 
   {
     // Init project
-    RCLCPP_INFO(get_logger(), "Starting [PoseCommandLeft]. . .");
+    RCLCPP_INFO(get_logger(), "Starting [PoseVisualizationLeft]. . .");
     // Load ROS 2 parameters from yaml file
     loadYAMLParams();
     // Init
@@ -195,7 +195,7 @@ public:
     theta_sol_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
     joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
 
-    pos_quat_b_e_ik_cmd_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
+    pos_quat_b_e_ik_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
   }
 
   void initTimeSpec()
@@ -212,8 +212,11 @@ public:
   void initROSComponents()
   {
     // -------- Publishers --------
-    joint_cmd_pub_ = create_publisher<sensor_msgs::msg::JointState>("/openarm_left/joint_command", rclcpp::SensorDataQoS());
-    ee_pose_cmd_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/openarm_left/ee_pose_command", 10);
+    joint_pub_ = create_publisher<sensor_msgs::msg::JointState>("/joint_states", rclcpp::SensorDataQoS());
+    ee_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/ee_pose", 10);
+
+    // joint_cmd_pub_ = create_publisher<sensor_msgs::msg::JointState>("/openarm_left/joint_command", rclcpp::SensorDataQoS());
+    // ee_pose_cmd_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/openarm_left/ee_pose_command", 10);
 
     // -------- TF broadcaster --------
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -222,7 +225,7 @@ public:
     timer_period_ = std::chrono::duration<double>(Ts_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period_),
-      std::bind(&PoseCommandLeft::timerCallback, this)
+      std::bind(&PoseVisualizationLeft::timerCallback, this)
     );
 
     // -------- Record start time --------
@@ -343,11 +346,11 @@ public:
   void solveFK()
   {
     // Compute FK with PoE and publish EE pose w.r.t. base
-    pos_quat_b_e_ik_cmd_ = RM::FKPoE(screws_, joint_angles_cmd_);
+    pos_quat_b_e_ik_ = RM::FKPoE(screws_, joint_angles_cmd_);
 
-    // std::cout << "\n-- FK result pose pos_quat_b_e_ik_cmd_ -->\n";
-    // std::cout << "pos [m]: " << pos_quat_b_e_ik_cmd_.pos.transpose() << "\n";
-    // std::cout << "quat (w,x,y,z): " << pos_quat_b_e_ik_cmd_.quat.w() << ", " << pos_quat_b_e_ik_cmd_.quat.x() << ", " << pos_quat_b_e_ik_cmd_.quat.y() << ", " << pos_quat_b_e_ik_cmd_.quat.z() << "\n";
+    // std::cout << "\n-- FK result pose pos_quat_b_e_ik_ -->\n";
+    // std::cout << "pos [m]: " << pos_quat_b_e_ik_.pos.transpose() << "\n";
+    // std::cout << "quat (w,x,y,z): " << pos_quat_b_e_ik_.quat.w() << ", " << pos_quat_b_e_ik_.quat.x() << ", " << pos_quat_b_e_ik_.quat.y() << ", " << pos_quat_b_e_ik_.quat.z() << "\n";
 
   }
 
@@ -358,30 +361,56 @@ public:
     gripper_pos_cmd_ = 0.5 * (1.0 + sin(2.0 * M_PI * f_[0] * t_)) * gripper_pos_max; // normalized position
   }
   
-  void publishCommands()
+  // void publishCommands()
+  // {
+  //   // Publish joint commands (including gripper position)
+  //   sensor_msgs::msg::JointState jcmd;
+  //   jcmd.header.stamp = now_time();
+  //   jcmd.name = joint_names_;
+  //   jcmd.name.push_back("openarm_left_finger_joint1");
+  //   jcmd.position.resize(n_ + 1);
+  //   for (int i = 0; i < n_; ++i) jcmd.position[i] = joint_angles_cmd_(i);
+  //   jcmd.position[n_] = gripper_pos_cmd_;
+  //   joint_cmd_pub_->publish(jcmd);
+
+  //   // Publish ee pose
+  //   geometry_msgs::msg::PoseStamped pcmd;
+  //   pcmd.header.stamp = jcmd.header.stamp;
+  //   pcmd.header.frame_id = base_link_.empty() ? "base_link" : base_link_;
+  //   pcmd.pose.position.x = pos_quat_b_e_ik_.pos.x();
+  //   pcmd.pose.position.y = pos_quat_b_e_ik_.pos.y();
+  //   pcmd.pose.position.z = pos_quat_b_e_ik_.pos.z();
+  //   pcmd.pose.orientation.x = pos_quat_b_e_ik_.quat.x();
+  //   pcmd.pose.orientation.y = pos_quat_b_e_ik_.quat.y();
+  //   pcmd.pose.orientation.z = pos_quat_b_e_ik_.quat.z();
+  //   pcmd.pose.orientation.w = pos_quat_b_e_ik_.quat.w();
+  //   ee_pose_cmd_pub_->publish(pcmd);
+  // }
+
+  void publishStates()
   {
-    // Publish joint commands (including gripper position)
-    sensor_msgs::msg::JointState jcmd;
-    jcmd.header.stamp = now_time();
-    jcmd.name = joint_names_;
-    jcmd.name.push_back("openarm_left_finger_joint1");
-    jcmd.position.resize(n_ + 1);
-    for (int i = 0; i < n_; ++i) jcmd.position[i] = joint_angles_cmd_(i);
-    jcmd.position[n_] = gripper_pos_cmd_;
-    joint_cmd_pub_->publish(jcmd);
+    // Publish joint angles (including gripper position)
+    sensor_msgs::msg::JointState js;
+    js.header.stamp = now_time();
+    js.name = joint_names_;
+    js.name.push_back("openarm_left_finger_joint1");
+    js.position.resize(n_ + 1);
+    for (int i = 0; i < n_; ++i) js.position[i] = joint_angles_cmd_(i);
+    js.position[n_] = gripper_pos_cmd_;
+    joint_pub_->publish(js);
 
     // Publish ee pose
-    geometry_msgs::msg::PoseStamped pcmd;
-    pcmd.header.stamp = jcmd.header.stamp;
-    pcmd.header.frame_id = base_link_.empty() ? "base_link" : base_link_;
-    pcmd.pose.position.x = pos_quat_b_e_ik_cmd_.pos.x();
-    pcmd.pose.position.y = pos_quat_b_e_ik_cmd_.pos.y();
-    pcmd.pose.position.z = pos_quat_b_e_ik_cmd_.pos.z();
-    pcmd.pose.orientation.x = pos_quat_b_e_ik_cmd_.quat.x();
-    pcmd.pose.orientation.y = pos_quat_b_e_ik_cmd_.quat.y();
-    pcmd.pose.orientation.z = pos_quat_b_e_ik_cmd_.quat.z();
-    pcmd.pose.orientation.w = pos_quat_b_e_ik_cmd_.quat.w();
-    ee_pose_cmd_pub_->publish(pcmd);
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header.stamp = js.header.stamp;
+    ps.header.frame_id = base_link_.empty() ? "base_link" : base_link_;
+    ps.pose.position.x = pos_quat_b_e_ik_.pos.x();
+    ps.pose.position.y = pos_quat_b_e_ik_.pos.y();
+    ps.pose.position.z = pos_quat_b_e_ik_.pos.z();
+    ps.pose.orientation.x = pos_quat_b_e_ik_.quat.x();
+    ps.pose.orientation.y = pos_quat_b_e_ik_.quat.y();
+    ps.pose.orientation.z = pos_quat_b_e_ik_.quat.z();
+    ps.pose.orientation.w = pos_quat_b_e_ik_.quat.w();
+    ee_pose_pub_->publish(ps);
   }
 
   void pubTF()
@@ -412,7 +441,8 @@ private:
     solveIK();
     solveFK();
     gripperControl();
-    publishCommands();
+    publishStates();
+    // publishCommands();
     pubTF();
   }
 
@@ -438,19 +468,21 @@ private:
   VectorXd theta_sol_;
   VectorXd joint_angles_cmd_;
   double gripper_pos_cmd_;
-  PosQuat pos_quat_b_e_ik_cmd_;
+  PosQuat pos_quat_b_e_ik_;
 
   // ROS
   rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ee_pose_cmd_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ee_pose_pub_;
+  // rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
+  // rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ee_pose_cmd_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 };
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<PoseCommandLeft>());
+    rclcpp::spin(std::make_shared<PoseVisualizationLeft>());
   } catch (const std::exception& e) {
     std::cerr << "Fatal: " << e.what() << std::endl;
   }
