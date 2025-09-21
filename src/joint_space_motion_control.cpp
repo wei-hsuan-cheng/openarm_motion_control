@@ -13,21 +13,21 @@
 
 using std::placeholders::_1;
 
-class JointPositionControl : public rclcpp::Node {
+class JointSpaceMotionControl : public rclcpp::Node {
 public:
-  JointPositionControl()
-  : rclcpp::Node("joint_position_control"),
+  JointSpaceMotionControl()
+  : rclcpp::Node("joint_space_motion_control"),
     fs_(500.0), Ts_(1.0 / fs_), Kp_(100.0), a_(100.0), VEL_LIMIT_(0.0)
   {
     // Init project
-    RCLCPP_INFO(get_logger(), "Starting [JointPositionControl] . . .");
+    RCLCPP_INFO(get_logger(), "Starting [JointSpaceMotionControl] . . .");
     // Load ROS 2 parameters from yaml file
     loadYAMLParams();
     // Init
     initRobotConfig();
     initControlState();
     initTimeSpec();
-    initROS();
+    initROSComponents();
 
     RCLCPP_INFO(get_logger(), "Configured with %d joints @ %.1f Hz. base_link=%s, ee_link=%s",
                 n_, fs_, base_link_.c_str(), ee_link_.c_str());
@@ -134,7 +134,7 @@ private:
     t_last_log_ = std::chrono::steady_clock::now();
   }
 
-  void initROS()
+  void initROSComponents()
   {
     // Publishers / Subscribers
     pub_ = create_publisher<sensor_msgs::msg::JointState>("/joint_states", rclcpp::SensorDataQoS());
@@ -142,13 +142,13 @@ private:
     sub_ = create_subscription<sensor_msgs::msg::JointState>(
       "/openarm_left/joint_command",
       rclcpp::SensorDataQoS(),
-      std::bind(&JointPositionControl::onCmd, this, _1)
+      std::bind(&JointSpaceMotionControl::onCmd, this, _1)
     );
 
     // Control loop
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(Ts_)),
-      std::bind(&JointPositionControl::onTimer, this)
+      std::bind(&JointSpaceMotionControl::onTimer, this)
     );
   }
 
@@ -259,7 +259,7 @@ int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<JointPositionControl>());
+    rclcpp::spin(std::make_shared<JointSpaceMotionControl>());
   } catch (const std::exception& e) {
     fprintf(stderr, "Fatal: %s\n", e.what());
   }

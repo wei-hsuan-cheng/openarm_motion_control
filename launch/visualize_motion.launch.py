@@ -21,7 +21,6 @@ def _load_yaml_dict(path: str) -> dict:
 
 
 def _pose_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
-    """Make a pose_command node from a YAML; preserves your param schema."""
     params_raw = _load_yaml_dict(yaml_path_abs)
     
     robot_name = params_raw.get("robot_name", "arm")
@@ -114,7 +113,7 @@ def rviz_spawner(context: LaunchContext):
     )]
 
 
-def pose_command_spawner(context: LaunchContext) -> List[Node]:
+def pose_visualization_spawner(context: LaunchContext) -> List[Node]:
     yaml_dir = os.path.join(
         get_package_share_directory("openarm_motion_control"),
     )
@@ -157,8 +156,8 @@ def generate_launch_description():
         function=rviz_spawner,
         args=[]
     )
-    pose_command_loader = OpaqueFunction(
-        function=pose_command_spawner,
+    pose_visualization_loader = OpaqueFunction(
+        function=pose_visualization_spawner,
         args=[]
     )
 
@@ -168,5 +167,5 @@ def generate_launch_description():
         bimanual_arg,
         robot_state_publisher_loader,
         rviz_loader,
-        pose_command_loader,
+        pose_visualization_loader,
     ])

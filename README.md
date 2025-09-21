@@ -25,16 +25,16 @@ colcon build --packages-select openarm_motion_control && . install/setup.bash
 
 - Bimanual task space motion
     ```bash
-    # Visualize FK/IK
-    ros2 launch openarm_motion_control pose_visualization.launch.py
+    # Robot FK/IK pure visualization
+    ros2 launch openarm_motion_control visualize_motion.launch.py
     ```
     <p align="center">
         <img src="assets/openarm_bimanual_demo.gif" alt="OpenArm Bimanual Demo" width="400"/>
     </p>
 
     ```bash
-    # Simulate robot motion control (first-order dynamic in joint velocity)
-    ros2 launch openarm_motion_control pose_control.launch.py
+    # Simulate robot motion control (first-order dynamics in each joint velocity)
+    ros2 launch openarm_motion_control motion_control.launch.py
     ```
 
 ## Acknowledgements

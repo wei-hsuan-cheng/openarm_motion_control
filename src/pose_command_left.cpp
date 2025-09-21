@@ -53,7 +53,7 @@ public:
     declare_parameter<std::vector<double>>("M_quaternion_wxyz", {}); // [w,x,y,z]
 
     // -------- Motion profile params --------
-    declare_parameter<double>("fs", 200.0);
+    declare_parameter<double>("fs", 500.0);
     declare_parameter<std::vector<double>>("offset_rad", {});   // q0
     declare_parameter<std::vector<double>>("amplitude_rad", {});// A
     declare_parameter<std::vector<double>>("frequency_hz", {}); // f
