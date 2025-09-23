@@ -11,7 +11,27 @@ from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
 
+""" 
+Load yaml files and params
+"""
+yaml_dir = os.path.join(
+    get_package_share_directory("openarm_motion_control"),
+)
+left_yaml = yaml_dir + "/screw_lists/openarm_v10_left_body_screws.yaml"
+right_yaml = yaml_dir + "/screw_lists/openarm_v10_right_body_screws.yaml"
 
+initial_cfg_path = os.path.join(
+        get_package_share_directory("openarm_motion_control"),
+        "config", "initial_configuration.yaml"
+    )
+
+motion_params = {
+        "offset_rad": [0.0],
+        "amplitude_rad": [0.35],
+        "frequency_hz": [0.05],
+        "phase_rad": [0.0],
+    }
+    
 def _load_yaml_dict(path: str) -> dict:
     with open(path, "r") as f:
         data = yaml.safe_load(f) or {}
@@ -19,8 +39,7 @@ def _load_yaml_dict(path: str) -> dict:
         raise RuntimeError(f"YAML at {path} is not a dict at top level.")
     return data
 
-
-def _node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
+def _load_screw_list_params(yaml_path_abs: str) -> dict:
     params_raw = _load_yaml_dict(yaml_path_abs)
     robot_name = params_raw.get("robot_name", "arm")
     jl = params_raw.get("joint_limits", {})
@@ -51,64 +70,19 @@ def _node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
         "M_position":           params_raw.get("M_position", []),
         "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),
     }
+    return screw_list_params
 
-    motion_params = {
-        "fs": 100.0,
-        "offset_rad": [0.0],
-        "amplitude_rad": [0.35],
-        "frequency_hz": [0.05],
-        "phase_rad": [0.0],
-    }
-
+def _mr_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
     return Node(
         package="openarm_motion_control",
         executable=node_name,
         name=node_name,
         output="screen",
-        parameters=[screw_list_params, motion_params],
+        parameters=[_load_screw_list_params(yaml_path_abs),
+                    initial_cfg_path,
+                    {"fs": 100.0},
+                    motion_params],
     )
-
-def _mc_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
-    params_raw = _load_yaml_dict(yaml_path_abs)
-    
-    robot_name = params_raw.get("robot_name", "arm")
-    jl = params_raw.get("joint_limits", {})
-    names = params_raw.get("joint_names", [])
-    jl_lower  = []
-    jl_upper  = []
-    jl_vel    = []
-    jl_effort = []
-    for name in names:
-        d = jl.get(name, {})
-        jl_lower.append( float(d.get("lower",  0.0)) )
-        jl_upper.append( float(d.get("upper",  0.0)) )
-        jl_vel.append(   float(d.get("velocity", 0.0)) )
-        jl_effort.append(float(d.get("effort",  0.0)) )
-
-    screw_list_params = {
-        "robot_name":           robot_name,
-        "base_link":            params_raw.get("base_link", ""),
-        "ee_link":              params_raw.get("ee_link", ""),
-        "screw_representation": params_raw.get("screw_representation", "body"),
-        "joint_names":          names,
-        "num_joints":           params_raw.get("num_joints", 0),
-        "screw_list":           params_raw.get("screw_list", {}),
-        "joint_limits_lower":   jl_lower,
-        "joint_limits_upper":   jl_upper,
-        "joint_limits_velocity": jl_vel,
-        "joint_limits_effort":  jl_effort,
-        "M_position":           params_raw.get("M_position", []),
-        "M_quaternion_wxyz":    params_raw.get("M_quaternion_wxyz", []),
-    }
-
-    return Node(
-        package="openarm_motion_control",
-        executable=node_name,
-        name=node_name,
-        output="screen",
-        parameters=[screw_list_params],
-    )
-
 
 def robot_state_publisher_spawner(context: LaunchContext, arm_type, ee_type, bimanual):
     arm_type_str = context.perform_substitution(arm_type)
@@ -139,7 +113,7 @@ def robot_state_publisher_spawner(context: LaunchContext, arm_type, ee_type, bim
 
 
 def rviz_spawner(context: LaunchContext):
-    rviz_config_file = "pose_visualization_bimanual.rviz"
+    rviz_config_file = "motion_control.rviz"
     rviz_config_path = os.path.join(
         get_package_share_directory("openarm_motion_control"),
         "rviz", rviz_config_file
@@ -152,30 +126,40 @@ def rviz_spawner(context: LaunchContext):
         output="screen",
     )]
 
-
-def pose_command_spawner(context: LaunchContext) -> List[Node]:
-    yaml_dir = os.path.join(
-        get_package_share_directory("openarm_motion_control"),
+def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
+    mrg_left  = Node(
+        package="openarm_motion_control",
+        executable="motion_reference_generator",
+        name="motion_reference_generator_left",
+        output="screen",
+        parameters=[_load_screw_list_params(left_yaml),
+                    {"gripper_joint_name": "openarm_left_finger_joint1"},
+                    initial_cfg_path,
+                    motion_params],
+        remappings=[("/pose_command", "/openarm_left/pose_command"),
+                    ("/joint_command", "/openarm_left/joint_command")],
     )
-    left_yaml = yaml_dir + "/screw_lists/openarm_v10_left_body_screws.yaml"
-    right_yaml = yaml_dir + "/screw_lists/openarm_v10_right_body_screws.yaml"
-    left_node  = _node_from_yaml(left_yaml,  "pose_command_left")
-    right_node = _node_from_yaml(right_yaml, "pose_visualization_right")
-    return [left_node, right_node]
+    
+    mrg_right = _mr_node_from_yaml(right_yaml, "pose_visualization_right")
+
+    return [mrg_left, mrg_right]
 
 def motion_control_spawner(context: LaunchContext) -> List[Node]:
-    yaml_dir = os.path.join(
-        get_package_share_directory("openarm_motion_control"),
-    )
-    left_yaml = yaml_dir + "/screw_lists/openarm_v10_left_body_screws.yaml"
-
     # Joint Space Motion Control
-    jsmc  = _mc_node_from_yaml(left_yaml,  "joint_space_motion_control")
-    # Task Space Motion Control
-    tsmc  = _mc_node_from_yaml(left_yaml,  "task_space_motion_control")
-    
-    # return [jsmc]
-    return [tsmc]
+    jsmc_left = Node(
+        package="openarm_motion_control",
+        executable="joint_space_motion_control",
+        name="joint_space_motion_control_left",
+        output="screen",
+        parameters=[_load_screw_list_params(left_yaml),
+                    initial_cfg_path,
+                    {"fs": 100.0}],
+        remappings=[("/joint_command", "/openarm_left/joint_command"),
+                    ("/pose_command", "/openarm_left/pose_command"),
+                    ("/joint_velocity_command", "/openarm_left/joint_velocity_command"),],
+    )
+
+    return [jsmc_left]
 
 def generate_launch_description():
     # Args
@@ -209,8 +193,8 @@ def generate_launch_description():
         function=rviz_spawner,
         args=[]
     )
-    pose_command_loader = OpaqueFunction(
-        function=pose_command_spawner,
+    motion_reference_generator_loader = OpaqueFunction(
+        function=motion_reference_generator_spawner,
         args=[]
     )
     motion_control_loader = OpaqueFunction(
@@ -224,6 +208,6 @@ def generate_launch_description():
         bimanual_arg,
         robot_state_publisher_loader,
         rviz_loader,
-        pose_command_loader,
+        motion_reference_generator_loader,
         motion_control_loader,
     ])

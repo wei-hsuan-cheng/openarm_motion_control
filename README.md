@@ -34,7 +34,8 @@ colcon build --packages-select openarm_motion_control && . install/setup.bash
 
     ```bash
     # Simulate robot motion control (first-order dynamics in each joint velocity)
-    ros2 launch openarm_motion_control motion_control.launch.py
+    ros2 launch openarm_motion_control joint_space_motion_control.launch.py
+    ros2 launch openarm_motion_control task_space_motion_control.launch.py
     ```
 
 ## Acknowledgements

@@ -140,7 +140,7 @@ private:
     pub_ = create_publisher<sensor_msgs::msg::JointState>("/joint_states", rclcpp::SensorDataQoS());
 
     sub_ = create_subscription<sensor_msgs::msg::JointState>(
-      "/openarm_left/joint_command",
+      "/joint_command",
       rclcpp::SensorDataQoS(),
       std::bind(&JointSpaceMotionControl::onCmd, this, _1)
     );
@@ -157,7 +157,7 @@ private:
   {
     if (msg.name.empty() || msg.position.size() < msg.name.size()) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Bad /openarm_left/joint_command (empty or positions < names). Ignoring.");
+        "Bad /joint_command (empty or positions < names). Ignoring.");
       return;
     }
 

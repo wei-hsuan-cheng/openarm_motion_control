@@ -16,24 +16,19 @@
 using RM = RMUtils;
 using std::placeholders::_1;
 
-class PoseCommandLeft : public rclcpp::Node {
+class MotionReferenceGenerator : public rclcpp::Node {
 public:
-  PoseCommandLeft() : rclcpp::Node("pose_command_left") 
+  MotionReferenceGenerator() : rclcpp::Node("motion_reference_generator") 
   {
-    // Init project
-    RCLCPP_INFO(get_logger(), "Starting [PoseCommandLeft]. . .");
-    // Load ROS 2 parameters from yaml file
     loadYAMLParams();
-    // Init
     initRobotConfig();
     initMotionParams();
-    initRobotControl();
+    initRobotIKSolver();
     initTimeSpec();
     initROSComponents();
     // Init logging
-    RCLCPP_INFO(get_logger(), "Configured with %d joints @ %.1f Hz. base_link=%s, ee_link=%s",
+    RCLCPP_INFO(get_logger(), "Starting [MotionReferenceGenerator]. . .\nConfigured with %d joints @ %.1f Hz. base_link=%s, ee_link=%s",
                 n_, fs_, base_link_.c_str(), ee_link_.c_str());
-
   }
 
   void loadYAMLParams()
@@ -51,9 +46,19 @@ public:
     declare_parameter<std::vector<double>>("joint_limits_effort",  {});
     declare_parameter<std::vector<double>>("M_position", {});        // [x,y,z]
     declare_parameter<std::vector<double>>("M_quaternion_wxyz", {}); // [w,x,y,z]
+    declare_parameter<std::string>("gripper_joint_name", ""); // gripper joint name
 
     // -------- Motion profile params --------
-    declare_parameter<double>("fs", 500.0);
+    declare_parameter<double>("fs", 100.0);
+
+    declare_parameter<double>("pos_x_cmd", 0.0);
+    declare_parameter<double>("pos_y_cmd", 0.0);
+    declare_parameter<double>("pos_z_cmd", 0.0);
+    declare_parameter<double>("quat_w_cmd", 1.0);
+    declare_parameter<double>("quat_x_cmd", 0.0);
+    declare_parameter<double>("quat_y_cmd", 0.0);
+    declare_parameter<double>("quat_z_cmd", 0.0);
+
     declare_parameter<std::vector<double>>("offset_rad", {});   // q0
     declare_parameter<std::vector<double>>("amplitude_rad", {});// A
     declare_parameter<std::vector<double>>("frequency_hz", {}); // f
@@ -71,6 +76,8 @@ public:
     get_parameter("num_joints", num_joints_param_);
     get_parameter("M_position", M_pos_);
     get_parameter("M_quaternion_wxyz", M_qwxyz_);
+
+    get_parameter("gripper_joint_name", gripper_joint_name_);
 
     // Validate joint names
     if (joint_names_.empty()) {
@@ -113,7 +120,7 @@ public:
     }
 
     // Print joint limits
-    std::cout << "\n-- Left arm joint limits [ll, ul, vel, eff] [rad, rad, rad/s, Nm] -->\n";
+    std::cout << "\n-- Joint limits [ll, ul, vel, eff] [rad, rad, rad/s, Nm] -->\n";
     for (int i = 0; i < n_; ++i) {
       std::cout << "  " << joint_names_[i] << ": ["
                 << joint_limits_(i,0) << ", "
@@ -155,13 +162,37 @@ public:
       ee_link_.empty()   ? "ee_link"   : ee_link_,
       joint_limits_
     );
-    // Print screw list
-    screws_.PrintList();
+
+    // // Print screw list
+    // screws_.PrintList();
   }
 
   void initMotionParams() 
   {
     // -------- Motion profile params --------
+    // get target pose command
+    double pos_x_cmd_, pos_y_cmd_, pos_z_cmd_;
+    double quat_w_cmd_, quat_x_cmd_, quat_y_cmd_, quat_z_cmd_;
+    get_parameter("pos_x_cmd", pos_x_cmd_);
+    get_parameter("pos_y_cmd", pos_y_cmd_);
+    get_parameter("pos_z_cmd", pos_z_cmd_);
+    get_parameter("quat_w_cmd", quat_w_cmd_);
+    get_parameter("quat_x_cmd", quat_x_cmd_);
+    get_parameter("quat_y_cmd", quat_y_cmd_);
+    get_parameter("quat_z_cmd", quat_z_cmd_);
+    // Store in pos_quat_b_e_nom_cmd_
+    pos_quat_b_e_nom_cmd_ = PosQuat(Vector3d(pos_x_cmd_, pos_y_cmd_, pos_z_cmd_), 
+                                    Quaterniond(quat_w_cmd_, quat_x_cmd_, quat_y_cmd_, quat_z_cmd_));
+
+    //print pos_quat_b_e_nom_cmd_
+    std::cout << "\n-- Nominal (centroid) pose command -->\n";
+    std::cout << "  Position: [" << pos_quat_b_e_nom_cmd_.pos.transpose() << "]\n";
+    std::cout << "  Quaternion (w,x,y,z): [" 
+              << pos_quat_b_e_nom_cmd_.quat.w() << ", "
+              << pos_quat_b_e_nom_cmd_.quat.x() << ", "
+              << pos_quat_b_e_nom_cmd_.quat.y() << ", "
+              << pos_quat_b_e_nom_cmd_.quat.z() << "]\n" << std::endl;
+
     get_parameter("offset_rad", q0_);
     get_parameter("amplitude_rad", A_);
     get_parameter("frequency_hz", f_);
@@ -184,18 +215,40 @@ public:
     expand_vec(phi_, 0.0);           // default 0 phase
   }
 
-  void initRobotControl()
+  void initRobotIKSolver()
   {
-    pos_quat_b_e_cmd_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
-    gripper_pos_cmd_ = 0.0;
-    theta_sol_ = VectorXd::Zero(n_); // Temp IK solution
-    joint_angles_cmd_ = VectorXd::Zero(n_); // Joint command to the robot
+    theta_sol_.setZero(n_); // Temp IK solution
+    joint_angles_cmd_.setZero(n_); // Joint command to the robot
 
     // IK initial guess
-    theta_sol_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
-    joint_angles_cmd_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
+    // Name-keyed params: initial_joint_position.<joint>
+    for (int i = 0; i < n_; ++i) {
+      const std::string &name = joint_names_[i];
+      // Declare per-joint params so rclcpp will accept them from YAML
+      const std::string pos_key = "initial_joint_position." + name;
+      declare_parameter<double>(pos_key, std::numeric_limits<double>::quiet_NaN());
+      
+      double vpos;
+      if (get_parameter(pos_key, vpos) && std::isfinite(vpos)) {
+        theta_sol_(i)  = vpos;
+        joint_angles_cmd_(i) = vpos;
+      }
+    }
 
-    pos_quat_b_e_ik_cmd_ = PosQuat(Vector3d::Zero(), Quaterniond::Identity());
+    // Name-keyed params: initial_gripper_position.<joint>
+    const std::string &gripper_joint_name = gripper_joint_name_;
+    const std::string gripper_pos_key = "initial_gripper_position." + gripper_joint_name;
+    declare_parameter<double>(gripper_pos_key, std::numeric_limits<double>::quiet_NaN());
+    double vgripper;
+    if (get_parameter(gripper_pos_key, vgripper) && std::isfinite(vgripper)) {
+      gripper_pos_cmd_ = vgripper;
+    }
+    // Print initial gripper position
+    std::cout << "\n-- Initial gripper position command -->\n";
+    std::cout << "  " << gripper_joint_name << ": " << gripper_pos_cmd_ << "\n";
+
+    // Initial pose command feasible from IK
+    pos_quat_b_e_ik_cmd_ = RM::FKPoE(screws_, joint_angles_cmd_);
   }
 
   void initTimeSpec()
@@ -212,8 +265,9 @@ public:
   void initROSComponents()
   {
     // -------- Publishers --------
-    joint_cmd_pub_ = create_publisher<sensor_msgs::msg::JointState>("/openarm_left/joint_command", rclcpp::SensorDataQoS());
-    ee_pose_cmd_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/openarm_left/ee_pose_command", 10);
+    joint_cmd_pub_ = create_publisher<sensor_msgs::msg::JointState>("/joint_command", rclcpp::SensorDataQoS());
+    ee_pose_cmd_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/pose_command", rclcpp::SensorDataQoS());
+    gripper_state_pub_ = create_publisher<sensor_msgs::msg::JointState>("/joint_states", rclcpp::SensorDataQoS());
 
     // -------- TF broadcaster --------
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -222,7 +276,7 @@ public:
     timer_period_ = std::chrono::duration<double>(Ts_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period_),
-      std::bind(&PoseCommandLeft::timerCallback, this)
+      std::bind(&MotionReferenceGenerator::timerCallback, this)
     );
 
     // -------- Record start time --------
@@ -255,9 +309,6 @@ public:
     // Translation: [0.324, 0.093, 0.515]
     // Rotation: in Quaternion [-0.085, -0.191, 0.879, -0.429] // (w,x,y,z)
 
-    pos_quat_b_e_cmd_.pos = Vector3d(0.25, 0.15, 0.5); // [m]
-    pos_quat_b_e_cmd_.quat = Quaterniond(-0.085, -0.191, 0.879, -0.429); // (w,x,y,z)
-
     // Time varying pose command
     double r = 0.175; // [m]
     // double r = 0.1; // [m]
@@ -271,7 +322,7 @@ public:
 
     PosQuat pos_quat_offset = PosQuat(Vector3d(offset_x, offset_y, offset_z), 
                                       RM::zyxEuler2Quat(Vector3d(offset_thz, offset_thy, offset_thx)));
-    pos_quat_b_e_cmd_ = RM::TransformPosQuats({pos_quat_b_e_cmd_, pos_quat_offset});
+    pos_quat_b_e_cmd_ = RM::TransformPosQuats({pos_quat_b_e_nom_cmd_, pos_quat_offset});
   }
 
   void solveIK()
@@ -301,7 +352,7 @@ public:
 
     // if (everyTimeInterval(1.0))
     // {
-    //   std::cout << "\n===== Left arm pose command =====\n";
+    //   std::cout << "\n===== Arm pose command =====\n";
       
     //   // Print IK results
     //   std::cout << "-- IK target pose pos_quat_b_e_cmd_ [m, quat_wxyz] -->\n" 
@@ -354,20 +405,18 @@ public:
   void gripperControl()
   {
     double gripper_pos_max = 0.044; // [m]
-    // Time-varying gripper command
-    gripper_pos_cmd_ = 0.5 * (1.0 + sin(2.0 * M_PI * f_[0] * t_)) * gripper_pos_max; // normalized position
+    // // Time-varying gripper command
+    // gripper_pos_cmd_ = 0.5 * (1.0 + sin(2.0 * M_PI * f_[0] * t_)) * gripper_pos_max; // normalized position
   }
   
   void publishCommands()
   {
-    // Publish joint commands (including gripper position)
+    // Publish joint commands (exclude gripper)
     sensor_msgs::msg::JointState jcmd;
     jcmd.header.stamp = now_time();
     jcmd.name = joint_names_;
-    jcmd.name.push_back("openarm_left_finger_joint1");
-    jcmd.position.resize(n_ + 1);
+    jcmd.position.resize(n_);
     for (int i = 0; i < n_; ++i) jcmd.position[i] = joint_angles_cmd_(i);
-    jcmd.position[n_] = gripper_pos_cmd_;
     joint_cmd_pub_->publish(jcmd);
 
     // Publish ee pose
@@ -382,6 +431,16 @@ public:
     pcmd.pose.orientation.z = pos_quat_b_e_ik_cmd_.quat.z();
     pcmd.pose.orientation.w = pos_quat_b_e_ik_cmd_.quat.w();
     ee_pose_cmd_pub_->publish(pcmd);
+  }
+
+  void publishGripperState()
+  {
+    // Publish gripper state
+    sensor_msgs::msg::JointState gcmd;
+    gcmd.header.stamp = now_time();
+    gcmd.name = {gripper_joint_name_};
+    gcmd.position = {gripper_pos_cmd_};
+    gripper_state_pub_->publish(gcmd);
   }
 
   void pubTF()
@@ -413,6 +472,7 @@ private:
     solveFK();
     gripperControl();
     publishCommands();
+    publishGripperState();
     pubTF();
   }
 
@@ -420,6 +480,7 @@ private:
   // Params / state
   std::string robot_name_, base_link_, ee_link_, rep_;
   std::vector<std::string> joint_names_;
+  std::string gripper_joint_name_;
   int num_joints_param_{0}, n_{0};
   std::vector<double> M_pos_, M_qwxyz_;
 
@@ -434,7 +495,7 @@ private:
   MatrixXd joint_limits_; // n x 4: [ll, ul, v, e]
   PosQuat M_;
   ScrewList screws_;
-  PosQuat pos_quat_b_e_cmd_;
+  PosQuat pos_quat_b_e_nom_cmd_, pos_quat_b_e_cmd_; // nominal and time-varying pose command
   VectorXd theta_sol_;
   VectorXd joint_angles_cmd_;
   double gripper_pos_cmd_;
@@ -444,13 +505,14 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ee_pose_cmd_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gripper_state_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 };
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<PoseCommandLeft>());
+    rclcpp::spin(std::make_shared<MotionReferenceGenerator>());
   } catch (const std::exception& e) {
     std::cerr << "Fatal: " << e.what() << std::endl;
   }

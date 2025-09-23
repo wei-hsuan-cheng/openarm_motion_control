@@ -21,15 +21,15 @@ public:
   TaskSpaceMotionControl()
   : rclcpp::Node("task_space_motion_control")
   {
-    RCLCPP_INFO(get_logger(), "Starting [TaskSpaceMotionControl] . . .");
     loadYAMLParams();
     initRobotConfig();
+    initJointStates();
     initRobotState();
-    initJointDynamics();
     initTSMCParams();
     initTimeSpec();
     initROSComponents();
-    RCLCPP_INFO(get_logger(), "Configured with %d joints @ %.1f Hz. base=%s, ee=%s",
+    // Init logging
+    RCLCPP_INFO(get_logger(), "Starting [TaskSpaceMotionControl] . . .\nConfigured with %d joints @ %.1f Hz. base=%s, ee=%s",
                 n_, fs_, base_link_.c_str(), ee_link_.c_str());
   }
 
@@ -48,7 +48,7 @@ private:
     declare_parameter<std::vector<double>>("joint_limits_effort",  {});
     declare_parameter<std::vector<double>>("M_position", {});        // [x,y,z]
     declare_parameter<std::vector<double>>("M_quaternion_wxyz", {}); // [w,x,y,z]
-    declare_parameter<double>("fs", 500.0);}
+    declare_parameter<double>("fs", 100.0);}
 
   void initRobotConfig() {
     get_parameter("robot_name", robot_name_);
@@ -128,26 +128,40 @@ private:
       ee_link_.empty()   ? "ee_link"   : ee_link_,
       joint_limits_
     );
+
     // Print screw list
     screws_.PrintList();
   }
 
-  void initRobotState() {
+  void initJointStates() {
+    received_joint_states_ = false;
     // Init joint state
     q_.setZero(n_);
-    q_ << -0.955, -0.674, 1.163, 1.321, 0.756, -0.590, -0.909;
     qd_.setZero(n_);
-    // Init EE pose
-    pos_quat_b_e_ = RM::FKPoE(screws_, q_);
+
+    // Name-keyed params: initial_joint_position.<joint>, initial_joint_velocity.<joint>
+    for (int i = 0; i < n_; ++i) {
+      const std::string &name = joint_names_[i];
+      // Declare per-joint params so rclcpp will accept them from YAML
+      const std::string pos_key = "initial_joint_position." + name;
+      const std::string vel_key = "initial_joint_velocity." + name;
+      declare_parameter<double>(pos_key, std::numeric_limits<double>::quiet_NaN());
+      declare_parameter<double>(vel_key, std::numeric_limits<double>::quiet_NaN());
+
+      double vpos, vvel;
+      if (get_parameter(pos_key, vpos) && std::isfinite(vpos)) q_(i)  = vpos;
+      if (get_parameter(vel_key, vvel) && std::isfinite(vvel)) qd_(i) = vvel;
+    }
+
+    is_first_loop_ = true;
     last_log_ = std::chrono::steady_clock::now();
   }
 
-  void initJointDynamics() {
-    /* First-order joint dynamics */
-    // Init joint velocity command
-    qd_cmd_.setZero(n_);
-    a_ = 100.0;                                   // first-order joint velocity response
-    vel_limit_ = 0.0;                            // |qdot| clamp [rad/s]
+  void initRobotState() {
+    // Init EE pose/twist
+    pos_quat_b_e_ = RM::FKPoE(screws_, q_);
+    twist_e_.setZero();
+    last_log_ = std::chrono::steady_clock::now();
   }
 
   void initTSMCParams()
@@ -160,14 +174,13 @@ private:
     received_cmd_ = false;
 
     // Pose controller params
-    double pos_mult = 2.5 * std::pow(10.0, 2.0);
-    double so3_mult = 2.0 * std::pow(10.0, 2.0);
+    double pos_mult = 5.0 * std::pow(10.0, 2.0);
+    double so3_mult = 5.0 * std::pow(10.0, 2.0);
     Vector3d kp_pos(1.0, 1.0, 1.0), kp_so3(1.0, 1.0, 1.0);
     kp_pos_so3_ = Matrix6d::Identity();
     kp_pos_so3_.topLeftCorner(3, 3)     = (pos_mult * kp_pos).asDiagonal();
     kp_pos_so3_.bottomRightCorner(3, 3) = (so3_mult * kp_so3).asDiagonal();
     error_norm_thresh_ << 1e-3, (1.0 * M_PI / 180.0);  // [m, rad]
-    // error_norm_thresh_ << 5e-4, (1.0 * M_PI / 180.0);  // [m, rad]
 
     error_norm_mavg_ = Vector2d::Zero();
 
@@ -179,7 +192,9 @@ private:
     twist_e_buffer_.clear();
     error_norm_buffer_.clear();
 
-    // RCLCPP_INFO(this->get_logger(), "Pose controller parameters updated.");
+    // Init joint velocity command
+    qd_cmd_.setZero(n_);
+
   }
 
   void initTimeSpec()
@@ -197,11 +212,16 @@ private:
   void initROSComponents() {
     // sub: desired EE pose
     sub_pose_cmd_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      "/openarm_left/ee_pose_command", rclcpp::QoS(10),
+      "/pose_command", rclcpp::SensorDataQoS(),
       std::bind(&TaskSpaceMotionControl::onPoseCmd, this, _1));
+    
+    // sub: current joint states
+    sub_joint_states_ = create_subscription<sensor_msgs::msg::JointState>(
+      "/joint_states", rclcpp::SensorDataQoS(),
+      std::bind(&TaskSpaceMotionControl::onJointStates, this, _1));
 
-    // pub: measured joints
-    pub_js_ = create_publisher<sensor_msgs::msg::JointState>("/joint_states", rclcpp::SensorDataQoS());
+    // pub: joint velocity command
+    pub_joint_velocity_command_ = create_publisher<sensor_msgs::msg::JointState>("/joint_velocity_command", rclcpp::SensorDataQoS());
 
     // control loop
     timer_ = create_wall_timer(
@@ -220,6 +240,35 @@ private:
     received_cmd_ = true;
   }
 
+  void onJointStates(const sensor_msgs::msg::JointState& msg) {
+    if (msg.name.empty() || msg.position.size() < msg.name.size()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "Bad /joint_states (empty or positions < names). Ignoring.");
+      return;
+    }
+
+    // Build quick lookup table: joint name -> index in message
+    std::unordered_map<std::string, std::size_t> idx;
+    idx.reserve(msg.name.size());
+    for (std::size_t k = 0; k < msg.name.size(); ++k) idx[msg.name[k]] = k;
+    // Fill q_, qd_ only for the n_ arm joints, ignore unknown/extras (e.g., gripper)
+    for (int i = 0; i < n_; ++i) {
+      auto it = idx.find(joint_names_[i]);
+      if (it == idx.end()) continue;  // this joint not present in the msg
+      std::size_t k = it->second;
+
+      // Bounds check for position/velocity arrays
+      if (k < msg.position.size()) q_(i) = msg.position[k];
+      if (k < msg.velocity.size()) qd_(i) = msg.velocity[k];
+    }
+
+    // Update FK/DK for current end-effector pose/twist
+    solveFKDK();
+
+    received_joint_states_ = true;
+  }
+
+
   // Helpers
   bool everyTimeInterval(const std::chrono::steady_clock::time_point& last_log, const double& t = 2.0) {
     auto now_steady = std::chrono::steady_clock::now();
@@ -235,61 +284,15 @@ private:
     }
   }
 
-  void publishRobotState() {
-    // Publish joint state
-    sensor_msgs::msg::JointState js;
-    js.header.stamp = now();
-    js.name = joint_names_;
-    js.position.resize(n_);
-    js.velocity.resize(n_);
-    for (int i = 0; i < n_; ++i) {
-      js.position[i] = q_(i);
-      js.velocity[i] = qd_(i);
-    }
-    pub_js_->publish(js);
-  }
-
-  void solveJointDynamics()
-  {
-    // Saturate joint velocity command
-    const double vl = vel_limit_;
-    if (vl > 0.0) {
-      for (int i = 0; i < n_; ++i) {
-        qd_cmd_(i) = std::max(-vl, std::min(vl, qd_cmd_(i)));
-      }
-    }
-
-    // ===== First-order joint velocity dynamics =====
-    // Governing equation: qdd + a * qd = q̇d_cmd 
-    // => qdd = q̇d_cmd − a * qd
-    Eigen::VectorXd qdd = qd_cmd_ - a_ * qd_;
-
-    // Propagate joint velocity
-    qd_ += qdd * Ts_;
-    // Clamp joint velocity
-    if (vl > 0.0) {
-      for (int i = 0; i < n_; ++i) {
-        qd_(i) = std::max(-vl, std::min(vl, qd_(i)));
-      }
-    }
-
-    // Propagate joint position
-    q_  += qd_ * Ts_;
-  }
-
-  void onTimer() {
-    if (!received_cmd_) return;
-
-    if (is_first_loop_)
-    {
-        k_ = 0;
-        is_first_loop_ = false;
-    }
-
-    // ===== FK for current pose =====
+  void solveFKDK() {
+    // FK for current end-effector pose
     pos_quat_b_e_ = RM::FKPoE(screws_, q_);
-
-    // ===== Pose controller =====
+    // DK for current end-effector twist
+    twist_e_ = RM::Jacob(screws_, q_) * qd_;
+  }
+  
+  void taskSpaceMotionController() {
+    // ===== Task space motion controller =====
     // Controller input (pose command and error)
     PosQuat pos_quat_m_cmd = RM::PosQuats2RelativePosQuat(pos_quat_b_e_, pos_quat_b_e_cmd_);
     pos_so3_m_cmd_ = RM::PosQuat2Posso3(pos_quat_m_cmd);
@@ -298,8 +301,8 @@ private:
     Vector6d twist_cmd_raw = RM::KpPosso3(pos_so3_m_cmd_, kp_pos_so3_, tsmc_target_reached_);
 
     // Twist S-curve for smoothing
-    // Vector6d twist_e_mavg = RM::MAvg(twist_e_, twist_e_buffer_, window_size_);
-    Vector6d twist_e_mavg = Vector6d::Zero();
+    Vector6d twist_e_mavg = RM::MAvg(twist_e_, twist_e_buffer_, window_size_);
+    // Vector6d twist_e_mavg = Vector6d::Zero();
     Vector6d twist_cmd  = RM::SCurve(twist_cmd_raw, twist_e_mavg, scur_.lambda, k_ * Ts_, scur_.T);
 
     // Error thresholding
@@ -307,15 +310,14 @@ private:
     error_norm_mavg_ = RM::MAvg(error_norm, error_norm_buffer_, window_size_);
     auto [twist_e_cmd_, tsmc_target_reached_] = RM::ErrorThreshold(error_norm_mavg_, error_norm_thresh_, twist_cmd); 
 
-    // // Print twist command
-    // RM::PrintVec(twist_e_cmd_, "twist_e_cmd_");
-
     // ===== Jacobian J(q) (6×n) and DLS pseudo-inverse mapping =====
     // J_e(θ)
     MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
 
     // Map from twist command to joint velocity command
-    double lambda = 1e-2; // DLS damping
+    // double lambda = 0.0; // DLS damping
+    // double lambda = 1e-2; // DLS damping
+    double lambda = 5e-2; // DLS damping
     if (lambda > 0.0) {
         // Damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I)^{-1}
         MatrixXd A = Je * Je.transpose() + (lambda * lambda) * MatrixXd::Identity(6,6);
@@ -324,16 +326,46 @@ private:
         qd_cmd_ = Je.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(twist_e_cmd_);
     }
 
+  }
 
-    solveJointDynamics();
-    publishRobotState();
+  void publishJointVelocityCommand() {
+    // Publish joint velocity command
+    sensor_msgs::msg::JointState js;
+    js.header.stamp = now();
+    js.name = joint_names_;
+    js.position.resize(n_);
+    js.velocity.resize(n_);
+    for (int i = 0; i < n_; ++i) {
+      js.velocity[i] = qd_cmd_(i);
+    }
+    pub_joint_velocity_command_->publish(js);
+  }
+
+  void onTimer() {
+    if (!received_cmd_ || !received_joint_states_) {
+      if (everyTimeInterval(last_log_, 1.0)) {
+        RCLCPP_WARN(get_logger(), "Waiting for /pose_command or /joint_states messages...");
+        last_log_ = std::chrono::steady_clock::now();
+
+        if(received_joint_states_) {
+          RCLCPP_INFO(get_logger(), "/joint_states received.");
+        }
+        if(received_cmd_) {
+          RCLCPP_INFO(get_logger(), "/pose_command received.");
+        }
+      }
+      return;
+    }
+
+    if (is_first_loop_)
+    {
+        k_ = 0;
+        is_first_loop_ = false;
+    }
+
+    taskSpaceMotionController();
+    publishJointVelocityCommand();
     periodicLogging(2.0);
-
-    // if (everyTimeInterval(last_log_, 2.0)) 
-    // {
-    //   RCLCPP_INFO(get_logger(), "pos_so3_error [m, rad]: [%.4f, %.4f]", error_norm_mavg_(0), error_norm_mavg_(1));
-    //   last_log_ = std::chrono::steady_clock::now();
-    // }
 
     k_++;
     t_ += Ts_;
@@ -360,7 +392,7 @@ private:
   Vector6d twist_e_;
   
   // Pose controller params
-  bool received_cmd_{false};
+  bool received_cmd_, received_joint_states_;
   PosQuat pos_quat_b_e_cmd_;
   Vector6d pos_so3_m_cmd_;
   Vector2d error_norm_mavg_;
@@ -393,7 +425,8 @@ private:
 
   // ROS
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_pose_cmd_;
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr        pub_js_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_states_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr        pub_joint_velocity_command_;
   rclcpp::TimerBase::SharedPtr                                      timer_;
 
   // logging

@@ -52,31 +52,35 @@ include_directories(
 # Source files
 set(POSE_VISUALIZATION_LEFT_SOURCES src/pose_visualization_left.cpp)
 set(POSE_VISUALIZATION_RIGHT_SOURCES src/pose_visualization_right.cpp)
+set(ROBOT_JOINT_DYNAMICS_SOURCES src/robot_joint_dynamics.cpp)
 set(JOINT_SPACE_MOTION_CONTROL_SOURCES src/joint_space_motion_control.cpp)
 set(TASK_SPACE_MOTION_CONTROL_SOURCES src/task_space_motion_control.cpp)
-set(POSE_COMMAND_LEFT_SOURCES src/pose_command_left.cpp)
+set(MOTION_REFERENCE_GENERATOR_SOURCES src/motion_reference_generator.cpp)
 
 # Add executables
 add_executable(pose_visualization_left ${POSE_VISUALIZATION_LEFT_SOURCES})
 add_executable(pose_visualization_right ${POSE_VISUALIZATION_RIGHT_SOURCES})
+add_executable(robot_joint_dynamics ${ROBOT_JOINT_DYNAMICS_SOURCES})
 add_executable(joint_space_motion_control ${JOINT_SPACE_MOTION_CONTROL_SOURCES})
 add_executable(task_space_motion_control ${TASK_SPACE_MOTION_CONTROL_SOURCES})
-add_executable(pose_command_left ${POSE_COMMAND_LEFT_SOURCES})
+add_executable(motion_reference_generator ${MOTION_REFERENCE_GENERATOR_SOURCES})
 
 # Link libraries
 ament_target_dependencies(pose_visualization_left ${dependencies})
 ament_target_dependencies(pose_visualization_right ${dependencies})
+ament_target_dependencies(robot_joint_dynamics ${dependencies})
 ament_target_dependencies(joint_space_motion_control ${dependencies})
 ament_target_dependencies(task_space_motion_control ${dependencies})
-ament_target_dependencies(pose_command_left ${dependencies})
+ament_target_dependencies(motion_reference_generator ${dependencies})
 
 # Install targets
 install(TARGETS
   pose_visualization_left
   pose_visualization_right
+  robot_joint_dynamics
   joint_space_motion_control
   task_space_motion_control
-  pose_command_left
+  motion_reference_generator
 
   DESTINATION lib/${PROJECT_NAME}
 )
