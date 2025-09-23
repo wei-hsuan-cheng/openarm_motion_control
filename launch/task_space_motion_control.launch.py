@@ -141,7 +141,7 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
     mrg_left  = Node(
         package="openarm_motion_control",
         executable="motion_reference_generator",
-        name="motion_reference_generator_left",
+        name="motion_reference_generator",
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     {"gripper_joint_name": "openarm_left_finger_joint1"},
@@ -155,7 +155,7 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
     mrg_right = Node(
         package="openarm_motion_control",
         executable="motion_reference_generator",
-        name="motion_reference_generator_right",
+        name="motion_reference_generator",
         output="screen",
         parameters=[_load_screw_list_params(right_yaml),
                     {"gripper_joint_name": "openarm_right_finger_joint1"},
@@ -166,16 +166,29 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
                     ("/joint_command", "/openarm_right/joint_command")],
     )
     
-    # mrg_right = _mr_node_from_yaml(right_yaml, "pose_visualization_right")
-
-    return [mrg_left, mrg_right]
+    pvr_right = Node(
+        package="openarm_motion_control",
+        executable="pose_visualization_right",
+        name="pose_visualization_right",
+        output="screen",
+        parameters=[_load_screw_list_params(right_yaml),
+                    initial_cfg_path,
+                    {"fs": 100.0},
+                    motion_params_right],
+    )
+    
+    return [
+            mrg_left, 
+            # mrg_right,
+            pvr_right,
+            ]
 
 def motion_control_spawner(context: LaunchContext) -> List[Node]:
     # Task Space Motion Control
     tsmc_left = Node(
         package="openarm_motion_control",
         executable="task_space_motion_control",
-        name="task_space_motion_control_left",
+        name="task_space_motion_control",
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     initial_cfg_path,
@@ -187,7 +200,7 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
     tsmc_right = Node(
         package="openarm_motion_control",
         executable="task_space_motion_control",
-        name="task_space_motion_control_right",
+        name="task_space_motion_control",
         output="screen",
         parameters=[_load_screw_list_params(right_yaml),
                     initial_cfg_path,
@@ -196,13 +209,16 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
                     ("/joint_velocity_command", "/openarm_right/joint_velocity_command"),],
     )
 
-    return [tsmc_left, tsmc_right]
+    return [
+            tsmc_left, 
+            # tsmc_right,
+            ]
 
 def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
     rjd_left = Node(
         package="openarm_motion_control",
         executable="robot_joint_dynamics",
-        name="robot_joint_dynamics_left",
+        name="robot_joint_dynamics",
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     initial_cfg_path,
@@ -213,7 +229,7 @@ def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
     rjd_right = Node(
         package="openarm_motion_control",
         executable="robot_joint_dynamics",
-        name="robot_joint_dynamics_right",
+        name="robot_joint_dynamics",
         output="screen",
         parameters=[_load_screw_list_params(right_yaml),
                     initial_cfg_path,
@@ -221,7 +237,10 @@ def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
         remappings=[("/joint_velocity_command", "/openarm_right/joint_velocity_command")],
     )
     
-    return [rjd_left, rjd_right]
+    return [
+            rjd_left, 
+            # rjd_right,
+            ]
 
 def generate_launch_description():
     # Args

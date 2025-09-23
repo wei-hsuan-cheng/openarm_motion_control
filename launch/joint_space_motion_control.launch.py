@@ -25,12 +25,20 @@ initial_cfg_path = os.path.join(
         "config", "initial_configuration.yaml"
     )
 
-motion_params = {
-        "offset_rad": [0.0],
-        "amplitude_rad": [0.35],
-        "frequency_hz": [0.05],
-        "phase_rad": [0.0],
-    }
+motion_params_left = {
+    "pos_x_cmd": 0.25,
+    "pos_y_cmd": 0.15,
+    "pos_z_cmd": 0.5,
+    "quat_w_cmd": -0.085,
+    "quat_x_cmd": -0.191,
+    "quat_y_cmd": 0.879,
+    "quat_z_cmd": -0.429,
+    
+    "offset_rad": [0.0],
+    "amplitude_rad": [0.35],
+    "frequency_hz": [0.05],
+    "phase_rad": [0.0],
+}
     
 def _load_yaml_dict(path: str) -> dict:
     with open(path, "r") as f:
@@ -81,7 +89,7 @@ def _mr_node_from_yaml(yaml_path_abs: str, node_name: str) -> Node:
         parameters=[_load_screw_list_params(yaml_path_abs),
                     initial_cfg_path,
                     {"fs": 100.0},
-                    motion_params],
+                    motion_params_left],
     )
 
 def robot_state_publisher_spawner(context: LaunchContext, arm_type, ee_type, bimanual):
@@ -130,12 +138,13 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
     mrg_left  = Node(
         package="openarm_motion_control",
         executable="motion_reference_generator",
-        name="motion_reference_generator_left",
+        name="motion_reference_generator",
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     {"gripper_joint_name": "openarm_left_finger_joint1"},
                     initial_cfg_path,
-                    motion_params],
+                    {"fs": 100.0},
+                    motion_params_left],
         remappings=[("/pose_command", "/openarm_left/pose_command"),
                     ("/joint_command", "/openarm_left/joint_command")],
     )
@@ -153,7 +162,7 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     initial_cfg_path,
-                    {"fs": 100.0}],
+                    {"fs": 500.0}],
         remappings=[("/joint_command", "/openarm_left/joint_command"),
                     ("/pose_command", "/openarm_left/pose_command"),
                     ("/joint_velocity_command", "/openarm_left/joint_velocity_command"),],
