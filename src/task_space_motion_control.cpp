@@ -291,6 +291,24 @@ private:
     twist_e_ = RM::Jacob(screws_, q_) * qd_;
   }
   
+  void resolvedMotionRateController() 
+  {
+    // ===== Jacobian J(q) (6×n) and DLS pseudo-inverse mapping =====
+    // J_e(θ)
+    MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
+    // Map from twist command to joint velocity command
+    // double lambda = 0.0; // DLS damping
+    // double lambda = 1e-2; // DLS damping
+    double lambda = 5e-2; // DLS damping
+    if (lambda > 0.0) {
+        // Damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I)^{-1}
+        MatrixXd A = Je * Je.transpose() + (lambda * lambda) * MatrixXd::Identity(6,6);
+        qd_cmd_ = Je.transpose() * A.inverse() * twist_e_cmd_;
+    } else {
+        qd_cmd_ = Je.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(twist_e_cmd_);
+    }
+  }
+
   void taskSpaceMotionController() {
     // ===== Task space motion controller =====
     // Controller input (pose command and error)
@@ -308,23 +326,12 @@ private:
     // Error thresholding
     Vector2d error_norm = Vector2d(RM::Norm(pos_so3_m_cmd_.head(3)), RM::Norm(pos_so3_m_cmd_.tail(3)));
     error_norm_mavg_ = RM::MAvg(error_norm, error_norm_buffer_, window_size_);
-    auto [twist_e_cmd_, tsmc_target_reached_] = RM::ErrorThreshold(error_norm_mavg_, error_norm_thresh_, twist_cmd); 
-
-    // ===== Jacobian J(q) (6×n) and DLS pseudo-inverse mapping =====
-    // J_e(θ)
-    MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
-
-    // Map from twist command to joint velocity command
-    // double lambda = 0.0; // DLS damping
-    // double lambda = 1e-2; // DLS damping
-    double lambda = 5e-2; // DLS damping
-    if (lambda > 0.0) {
-        // Damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I)^{-1}
-        MatrixXd A = Je * Je.transpose() + (lambda * lambda) * MatrixXd::Identity(6,6);
-        qd_cmd_ = Je.transpose() * A.inverse() * twist_e_cmd_;
-    } else {
-        qd_cmd_ = Je.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(twist_e_cmd_);
-    }
+    auto [twist_e_cmd, tsmc_target_reached] = RM::ErrorThreshold(error_norm_mavg_, error_norm_thresh_, twist_cmd); 
+    twist_e_cmd_ = twist_e_cmd;
+    tsmc_target_reached_ = tsmc_target_reached;
+    
+    // Map twist command to joint velocity command
+    resolvedMotionRateController();
 
   }
 
