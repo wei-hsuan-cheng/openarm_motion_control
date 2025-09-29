@@ -1,5 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include "robot_math_utils/robot_math_utils_v1_15.hpp"
+#include "robot_math_utils/robot_math_utils_v1_16.hpp"
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -12,6 +12,7 @@
 #include <string>
 #include <chrono>
 #include <iostream>
+#include <limits>
 
 using RM = RMUtils;
 using std::placeholders::_1;
@@ -279,7 +280,8 @@ private:
   void periodicLogging(double t = 2.0) {
     if (everyTimeInterval(last_log_, t)) 
     {
-      RCLCPP_INFO(get_logger(), "pos_so3_error [m, rad]: [%.4f, %.4f]", error_norm_mavg_(0), error_norm_mavg_(1));
+      RCLCPP_INFO(get_logger(), "pos_so3_error [m, rad]: [%.4f, %.4f], w_min=%.6e",
+                  error_norm_mavg_(0), error_norm_mavg_(1), w_min_);
       last_log_ = std::chrono::steady_clock::now();
     }
   }
@@ -297,16 +299,54 @@ private:
     // J_e(θ)
     MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
     // Map from twist command to joint velocity command
-    // double lambda = 0.0; // DLS damping
-    // double lambda = 1e-2; // DLS damping
-    double lambda = 5e-2; // DLS damping
-    if (lambda > 0.0) {
-        // Damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I)^{-1}
-        MatrixXd A = Je * Je.transpose() + (lambda * lambda) * MatrixXd::Identity(6,6);
+    // double lambda_dls = 0.0; // DLS damping
+    // double lambda_dls = 1e-2; // DLS damping
+    double lambda_dls = 5e-2; // DLS damping
+    if (lambda_dls > 0.0) {
+        // Damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I_6)^{-1}
+        MatrixXd A = Je * Je.transpose() + (lambda_dls * lambda_dls) * MatrixXd::Identity(6,6);
         qd_cmd_ = Je.transpose() * A.inverse() * twist_e_cmd_;
     } else {
         qd_cmd_ = Je.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(twist_e_cmd_);
     }
+
+    // Print manipulability index and update minimum seen so far
+    double w = RM::ManipulabilityIndex(Je);
+    updateMinManipulability(Je, w);
+    std::cout << "w = " << w << "   (log10(w) = " << RM::ManipulabilityIndexLog10(Je)
+              << ")   w_min = " << w_min_ << "\n";
+    // w_min = 0.00855028
+  }
+
+  void parkController() 
+  {
+    // ===== Jacobian J(q) (6×n) and DLS pseudo-inverse mapping =====
+    // J_e(θ)
+    MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
+    // Map from twist command to joint velocity command
+
+    // Pseudo-inverse with damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I_6)^{-1}
+    double lambda_dls = 5e-2; // DLS damping
+    // double lambda_dls = 0.0; // DLS damping
+    MatrixXd A = Je * Je.transpose() + (lambda_dls * lambda_dls) * MatrixXd::Identity(6,6);
+    MatrixXd Je_pinv = Je.transpose() * A.inverse();
+    
+    // Part controller (map from twist command to joint velocity command considering manipulability as secondary objective)
+    // qd_cmd_ = J⁺ v + (1/λ) (I_n - J⁺ J) J_w
+    double lambda = 1e-2; // secondary objective gain
+    // Null space projection matrix
+    MatrixXd Nproj = MatrixXd::Identity(n_, n_) - Je_pinv * Je;
+    VectorXd J_w = RM::ManipulabilityGradient(screws_, q_, lambda_dls);
+    qd_cmd_ = Je_pinv * twist_e_cmd_ + (1 / lambda) * Nproj * J_w;
+
+    // Print manipulability index and update minimum
+    double w = RM::ManipulabilityIndex(Je);
+    updateMinManipulability(Je, w);
+    std::cout << "w = " << w << "   (log10(w) = " << RM::ManipulabilityIndexLog10(Je)
+              << ")   w_min = " << w_min_ << "\n";
+    
+    // w_min = 0.00855861 @ lambda_dls=5e-2, lambda=1e-1
+    // w_min = 0.00861089 @ lambda_dls=5e-2, lambda=1e-2
   }
 
   void taskSpaceMotionController() {
@@ -329,9 +369,6 @@ private:
     auto [twist_e_cmd, tsmc_target_reached] = RM::ErrorThreshold(error_norm_mavg_, error_norm_thresh_, twist_cmd); 
     twist_e_cmd_ = twist_e_cmd;
     tsmc_target_reached_ = tsmc_target_reached;
-    
-    // Map twist command to joint velocity command
-    resolvedMotionRateController();
 
   }
 
@@ -370,8 +407,17 @@ private:
         is_first_loop_ = false;
     }
 
+    // Compute twist command from pose error
     taskSpaceMotionController();
+
+    // Map twist command to joint velocity command
+    // resolvedMotionRateController();
+    parkController();
+
+    // Send joint velocity command to motors
     publishJointVelocityCommand();
+    
+    // Periodic logging
     periodicLogging(2.0);
 
     k_++;
@@ -438,6 +484,19 @@ private:
 
   // logging
   std::chrono::steady_clock::time_point last_log_;
+
+  // manipulability tracking
+  double w_min_ { std::numeric_limits<double>::infinity() };
+
+  // Update the lowest manipulability encountered and optionally log
+  void updateMinManipulability(const MatrixXd& Je, double w_current) {
+    (void)Je; // reserved for future diagnostics
+    if (!std::isfinite(w_current)) return;
+    if (w_current < w_min_) {
+      w_min_ = w_current;
+      RCLCPP_WARN(get_logger(), "[Manipulability] New minimum observed: w_min=%.6e", w_min_);
+    }
+  }
 };
 
 int main(int argc, char** argv)
