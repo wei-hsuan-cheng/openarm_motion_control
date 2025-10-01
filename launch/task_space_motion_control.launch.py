@@ -43,7 +43,7 @@ motion_params_left = {
 motion_params_right = {
     "pos_x_cmd": 0.25,
     "pos_y_cmd": -0.15,
-    "pos_z_cmd": 0.5,
+    "pos_z_cmd": 0.25,
     "quat_w_cmd": -0.085,
     "quat_x_cmd": 0.191,
     "quat_y_cmd": 0.879,
@@ -51,7 +51,7 @@ motion_params_right = {
     
     "offset_rad": [0.0],
     "amplitude_rad": [0.35],
-    "frequency_hz": [0.05],
+    "frequency_hz": [0.01],
     "phase_rad": [0.0],
 }
     
