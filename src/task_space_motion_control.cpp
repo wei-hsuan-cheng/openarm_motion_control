@@ -363,18 +363,16 @@ private:
     //           << " (" << 1e6 / time_elapsed << " [Hz])\n";
   }
 
-  // ---- Helpers (加到 class private: 區塊) ----
-  // Smoothstep 權重，滿足：m>=m_bar → 0；m<=m_bar/2 → 1；端點一階導數為 0
+  // Smoothstep weight s.t. m>=m_bar -> 0；m<=m_bar/2 -> 1；zero first-ordered derivative at endpoints
   inline double shapeK(double mval, double mbar) const {
     if (mval >= mbar) return 0.0;
     if (mval <= 0.5 * mbar) return 1.0;
-    // t∈[0,1]: mval 從 mbar/2 → mbar 映到 1→0 的平滑三次曲線
+    // t∈[0,1]: map from [mbar/2, mbar] to [0,1]
     double t = (mval - 0.5 * mbar) / (0.5 * mbar); // t ∈ (0,1)
-    // smoothstep 反向：1 - (3t^2 - 2t^3)
+    // smoothstep：1 - (3t^2 - 2t^3)
     return 1.0 - (3.0 * t * t - 2.0 * t * t * t);
   }
 
-  // 取得 Jacobian 的（微）阻尼廣義逆 J^+ = J^T (JJ^T + eps^2 I)^{-1}
   inline Eigen::MatrixXd dlsPinv(const Eigen::MatrixXd& J, double eps) const {
     if (eps <= 0.0) {
       return J.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Eigen::MatrixXd::Identity(J.rows(), J.rows()));
@@ -383,58 +381,54 @@ private:
     return J.transpose() * A.inverse();
   }
 
-  // ---- 新的控制器：奇異點迴避 RMRC (第 3 節) ----
   void singularityAvoidanceController()
   {
-    // 1) 目標扭速度(任務空間)：δr
-    const Vector6d delta_r = twist_e_cmd_; // 你的 task-space 指令
+    // 1) δr
+    const Vector6d delta_r = twist_e_cmd_; 
 
-    // 2) Jacobian 與 pseudo-inverse
+    // 2) Jacobian and its pseudo-inverse
     MatrixXd Je = RM::Jacob(screws_, q_);          // 6 x n
-    double pinv_dls_eps_ = 1e-6;       // 只做數值穩定的很小阻尼
-    MatrixXd Je_pinv = dlsPinv(Je, pinv_dls_eps_); // n x 6（eps 極小，只為數值穩定）
+    double pinv_dls_eps_ = 1e-6;       
+    MatrixXd Je_pinv = dlsPinv(Je, pinv_dls_eps_); // n x 6
 
-    // 3) manipulability 與其梯度（∂m/∂q）    (Marani Eq.(6),(10))
-    double mom = RM::ManipulabilityIndex(Je);
-    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, /*lambda_dls=*/0.0); // n x 1
+    // 3) manipulability and its gradient（∂m/∂q）    (Marani Eq.(6),(10))
+    double w = RM::ManipulabilityIndex(Je);
+    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, /*lambda_dls=*/pinv_dls_eps_); // n x 1
 
-    // 4) 法向量 n_m ∝ J^{+^T} (∂m/∂q)         (Marani Eq.(15))
+    // 4) Normal n_m ∝ J^{+^T} (∂m/∂q)         (Marani Eq.(15))
     Vector6d nm = (Je_pinv.transpose() * dm_dq);   // 6 x 1
     double nm_norm = nm.norm();
     if (nm_norm < 1e-12) {
-      // 無法穩定計算法向量，退回標準 RMRC
+      // Standard RMRC
       qd_cmd_ = Je_pinv * delta_r;
-      // 追蹤最小操控度
-      updateMinManipulability(Je, mom);
+      updateMinManipulability(Je, w);
       return;
     }
     nm /= nm_norm;
 
-    // 5) 權重函數 k(m; \bar m) 與「回拉」項 k(m; \bar m/2)  (Marani Eq.(17),(19))
-    double mom_thresh_ = 0.008;         // 可調下限 \bar m，越大越保守
-    double k1 = shapeK(mom, mom_thresh_);          // 接近奇異時逐步壓投影
-    double k2 = shapeK(mom, 0.5 * mom_thresh_);    // 進入內側時回拉至等值面
+    // 5) Weight function k(m; \bar m) and the "escape" term k(m; \bar m/2)  (Marani Eq.(17),(19))
+    // double w_thresh_ = 1e-2;
+    double w_thresh_ = 2e-2;
+    double k1 = shapeK(w, w_thresh_);
+    double k2 = shapeK(w, 0.5 * w_thresh_);
 
-    // 6) 僅在「操控度在下降方向」時才投影 (δr ⋅ n_m > 0)  (文字說明 + Eq.(20)-(21))
+    // 6) only work as δr ⋅ n_m > 0  (Eq.(20)-(21))
     double s = delta_r.dot(nm);
-    double gate = (s > 0.0) ? 1.0 : 0.0;           // 只在趨近奇異時作用
+    double gate = (s > 0.0) ? 0.0 : 1.0;
 
-    // 校正量 δr_corr = gate * (δr⋅n_m) n_m k1  -  （負號體現在 δr_p = δr - δr_corr）
-    //                 - k2 * (-n_m) ；等價於 + k2 * n_m（回拉向外）
-    Vector6d delta_r_corr = gate * (s) * nm * k1 + k2 * nm;
+    Vector6d delta_r_corr = (-1) * gate * (s) * nm * k1 + nm * k2;
 
-    // 7) 投影後任務與關節速度     (Marani Eq.(22))
-    Vector6d delta_r_proj = delta_r - delta_r_corr;
+    // 7) Marani Eq.(22)
+    Vector6d delta_r_proj = delta_r + delta_r_corr;
     qd_cmd_ = Je_pinv * delta_r_proj;
 
-    // 8) 記錄/列印
-    updateMinManipulability(Je, mom);
-    std::cout << "[SA-RMRC] m=" << mom
+    // 8) Logging
+    updateMinManipulability(Je, w);
+    std::cout << "[SA-RMRC] w=" << w
               << "  k1=" << k1 << "  k2=" << k2
               << "  dot=" << s
               << "  w_min=" << w_min_ << "\n";
   }
-
 
   void taskSpaceMotionController() {
     // ===== Task space motion controller =====
@@ -498,9 +492,9 @@ private:
     taskSpaceMotionController();
 
     // Map twist command to joint velocity command
-    resolvedMotionRateController();
+    // resolvedMotionRateController();
     // parkController();
-    // singularityAvoidanceController();
+    singularityAvoidanceController();
 
     // Send joint velocity command to motors
     publishJointVelocityCommand();
