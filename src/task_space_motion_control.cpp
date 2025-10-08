@@ -300,9 +300,32 @@ private:
     twist_e_ = RM::Jacob(screws_, q_) * qd_;
   }
   
-  void resolvedMotionRateController() 
+  void taskSpaceMotionController() {
+    // ===== Task space motion controller =====
+    // Controller input (pose command and error)
+    PosQuat pos_quat_m_cmd = RM::PosQuats2RelativePosQuat(pos_quat_b_e_, pos_quat_b_e_cmd_);
+    pos_so3_m_cmd_ = RM::PosQuat2Posso3(pos_quat_m_cmd);
+
+    // P-control for trajectory tracking
+    Vector6d twist_cmd_raw = RM::KpPosso3(pos_so3_m_cmd_, kp_pos_so3_, tsmc_target_reached_);
+
+    // Twist S-curve for smoothing
+    Vector6d twist_e_mavg = RM::MAvg(twist_e_, twist_e_buffer_, window_size_);
+    // Vector6d twist_e_mavg = Vector6d::Zero();
+    Vector6d twist_cmd  = RM::SCurve(twist_cmd_raw, twist_e_mavg, scur_.lambda, k_ * Ts_, scur_.T);
+
+    // Error thresholding
+    Vector2d error_norm = Vector2d(RM::Norm(pos_so3_m_cmd_.head(3)), RM::Norm(pos_so3_m_cmd_.tail(3)));
+    error_norm_mavg_ = RM::MAvg(error_norm, error_norm_buffer_, window_size_);
+    auto [twist_e_cmd, tsmc_target_reached] = RM::ErrorThreshold(error_norm_mavg_, error_norm_thresh_, twist_cmd); 
+    twist_e_cmd_ = twist_e_cmd;
+    tsmc_target_reached_ = tsmc_target_reached;
+
+  }
+
+  void RMRC69() 
   {
-    // ===== Jacobian J(q) (6×n) and DLS pseudo-inverse mapping =====
+    // ===== Resolved motion rate control =====
     // J_e(θ)
     MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
     // Map from twist command to joint velocity command
@@ -325,9 +348,9 @@ private:
     // w_min = 0.00855028
   }
 
-  void parkController() 
+  void Park99() 
   {
-    // ===== Jacobian J(q) (6×n) and DLS pseudo-inverse mapping =====
+    // ===== Manipulability maximization via Park99 =====
     // J_e(θ)
     MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
     // Map from twist command to joint velocity command
@@ -363,8 +386,13 @@ private:
     //           << " (" << 1e6 / time_elapsed << " [Hz])\n";
   }
 
-  // Smoothstep weight s.t. m>=m_bar -> 0；m<=m_bar/2 -> 1；zero first-ordered derivative at endpoints
+  // Smoothstep weight
   inline double shapeK(double mval, double mbar) const {
+    // Smoothstep weight s.t. 
+    // m>=m_bar -> 0；
+    // m<=m_bar/2 -> 1；
+    // zero first-ordered derivative at endpoints
+
     if (mval >= mbar) return 0.0;
     if (mval <= 0.5 * mbar) return 1.0;
     // t∈[0,1]: map from [mbar/2, mbar] to [0,1]
@@ -373,7 +401,7 @@ private:
     return 1.0 - (3.0 * t * t - 2.0 * t * t * t);
   }
 
-  inline Eigen::MatrixXd dlsPinv(const Eigen::MatrixXd& J, double eps) const {
+  inline Eigen::MatrixXd pinv_dls(const Eigen::MatrixXd& J, double eps) const {
     if (eps <= 0.0) {
       return J.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Eigen::MatrixXd::Identity(J.rows(), J.rows()));
     }
@@ -381,7 +409,7 @@ private:
     return J.transpose() * A.inverse();
   }
 
-  void singularityAvoidanceController()
+  void Marani02()
   {
     // 1) δr
     const Vector6d delta_r = twist_e_cmd_; 
@@ -389,17 +417,17 @@ private:
     // 2) Jacobian and its pseudo-inverse
     MatrixXd Je = RM::Jacob(screws_, q_);          // 6 x n
     double pinv_dls_eps_ = 1e-6;       
-    MatrixXd Je_pinv = dlsPinv(Je, pinv_dls_eps_); // n x 6
+    MatrixXd Je_pinv = pinv_dls(Je, pinv_dls_eps_); // n x 6
 
     // 3) manipulability and its gradient（∂m/∂q）    (Marani Eq.(6),(10))
     double w = RM::ManipulabilityIndex(Je);
-    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, /*lambda_dls=*/pinv_dls_eps_); // n x 1
+    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, pinv_dls_eps_); // R^n
 
     // 4) Normal n_m ∝ J^{+^T} (∂m/∂q)         (Marani Eq.(15))
-    Vector6d nm = (Je_pinv.transpose() * dm_dq);   // 6 x 1
+    Vector6d nm = (dm_dq.transpose() * Je_pinv);   // R^n
     double nm_norm = nm.norm();
     if (nm_norm < 1e-12) {
-      // Standard RMRC
+      // Standard RMRC69
       qd_cmd_ = Je_pinv * delta_r;
       updateMinManipulability(Je, w);
       return;
@@ -424,33 +452,57 @@ private:
 
     // 8) Logging
     updateMinManipulability(Je, w);
-    std::cout << "[SA-RMRC] w=" << w
+    std::cout << "[Marani02] w=" << w
               << "  k1=" << k1 << "  k2=" << k2
               << "  dot=" << s
               << "  w_min=" << w_min_ << "\n";
   }
 
-  void taskSpaceMotionController() {
-    // ===== Task space motion controller =====
-    // Controller input (pose command and error)
-    PosQuat pos_quat_m_cmd = RM::PosQuats2RelativePosQuat(pos_quat_b_e_, pos_quat_b_e_cmd_);
-    pos_so3_m_cmd_ = RM::PosQuat2Posso3(pos_quat_m_cmd);
+  void SAC()
+  {
+    // Jacobian and its pseudo-inverse
+    MatrixXd Je = RM::Jacob(screws_, q_);          // 6 x n
+    double pinv_dls_eps_ = 1e-6;       
+    MatrixXd Je_pinv = pinv_dls(Je, pinv_dls_eps_); // n x 6
 
-    // P-control for trajectory tracking
-    Vector6d twist_cmd_raw = RM::KpPosso3(pos_so3_m_cmd_, kp_pos_so3_, tsmc_target_reached_);
+    // Manipulability and its gradient (∂w/∂q)
+    double w = RM::ManipulabilityIndex(Je);
+    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, pinv_dls_eps_); // R^n
 
-    // Twist S-curve for smoothing
-    Vector6d twist_e_mavg = RM::MAvg(twist_e_, twist_e_buffer_, window_size_);
-    // Vector6d twist_e_mavg = Vector6d::Zero();
-    Vector6d twist_cmd  = RM::SCurve(twist_cmd_raw, twist_e_mavg, scur_.lambda, k_ * Ts_, scur_.T);
+    // Normal n_w ∝ (∂w/∂q) J^{+}          (Marani Eq.(15))
+    Vector6d n_w = (dm_dq.transpose() * Je_pinv);   // R^6
+    double n_w_norm = n_w.norm();
+    if (n_w_norm < 1e-12) {
+      // Standard RMRC69
+      qd_cmd_ = Je_pinv * twist_e_cmd_;
+      updateMinManipulability(Je, w);
+      return;
+    }
+    n_w /= n_w_norm;
 
-    // Error thresholding
-    Vector2d error_norm = Vector2d(RM::Norm(pos_so3_m_cmd_.head(3)), RM::Norm(pos_so3_m_cmd_.tail(3)));
-    error_norm_mavg_ = RM::MAvg(error_norm, error_norm_buffer_, window_size_);
-    auto [twist_e_cmd, tsmc_target_reached] = RM::ErrorThreshold(error_norm_mavg_, error_norm_thresh_, twist_cmd); 
-    twist_e_cmd_ = twist_e_cmd;
-    tsmc_target_reached_ = tsmc_target_reached;
+    // Weight function k(m; \bar m) and the "escape" term k(m; \bar m/2)  (Marani Eq.(17),(19))
+    double w_thresh_ = 2e-2;
+    double k1 = shapeK(w, w_thresh_);
+    double k2 = shapeK(w, 0.5 * w_thresh_);
 
+    // Decelerate as twist ⋅ n_w < 0 and w <= w_thresh;
+    // twist becomes zero as k1 -> 1 (need 1 - k1)
+    double s = twist_e_cmd_.dot(n_w);
+    double s_norm = std::abs(s);
+    Vector6d twist_e_cmd_sac = twist_e_cmd_;
+    if (w <= w_thresh_ && s < 0.0) {
+      // Apply SAC
+      twist_e_cmd_sac = twist_e_cmd_ * (1.0 - k1);
+    }
+
+    qd_cmd_ = Je_pinv * twist_e_cmd_sac;
+
+    // Logging
+    updateMinManipulability(Je, w);
+    std::cout << "[SAC] w=" << w
+              << "  k1=" << k1 << "  k2=" << k2
+              << "  dot=" << s
+              << "  w_min=" << w_min_ << "\n";
   }
 
   void publishJointVelocityCommand() {
@@ -492,9 +544,10 @@ private:
     taskSpaceMotionController();
 
     // Map twist command to joint velocity command
-    // resolvedMotionRateController();
-    // parkController();
-    singularityAvoidanceController();
+    // RMRC69();
+    // Park99();
+    // Marani02();
+    SAC();
 
     // Send joint velocity command to motors
     publishJointVelocityCommand();
