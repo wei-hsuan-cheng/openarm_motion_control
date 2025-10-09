@@ -323,9 +323,9 @@ private:
 
   }
 
-  void RMRC69() 
+  void RRMC69() 
   {
-    // ===== Resolved motion rate control =====
+    // ===== Resolved-rate motion control; Whitney69 =====
     // J_e(θ)
     MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
     // Map from twist command to joint velocity command
@@ -427,7 +427,7 @@ private:
     Vector6d nm = (dm_dq.transpose() * Je_pinv);   // R^n
     double nm_norm = nm.norm();
     if (nm_norm < 1e-12) {
-      // Standard RMRC69
+      // Standard RRMC69
       qd_cmd_ = Je_pinv * delta_r;
       updateMinManipulability(Je, w);
       return;
@@ -473,7 +473,7 @@ private:
     Vector6d n_w = (dm_dq.transpose() * Je_pinv);   // R^6
     double n_w_norm = n_w.norm();
     if (n_w_norm < 1e-12) {
-      // Standard RMRC69
+      // Standard RRMC69
       qd_cmd_ = Je_pinv * twist_e_cmd_;
       updateMinManipulability(Je, w);
       return;
@@ -544,7 +544,7 @@ private:
     taskSpaceMotionController();
 
     // Map twist command to joint velocity command
-    // RMRC69();
+    // RRMC69();
     // Park99();
     // Marani02();
     SAC();
