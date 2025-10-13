@@ -41,9 +41,9 @@ motion_params_left = {
 }
 
 motion_params_right = {
-    "pos_x_cmd": 0.25,
-    "pos_y_cmd": -0.15,
-    "pos_z_cmd": 0.25,
+    "pos_x_cmd": 0.20,
+    "pos_y_cmd": -0.25,
+    "pos_z_cmd": 0.40,
     "quat_w_cmd": -0.085,
     "quat_x_cmd": 0.191,
     "quat_y_cmd": 0.879,
@@ -179,8 +179,8 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
     
     return [
             mrg_left, 
-            # mrg_right,
-            pvr_right,
+            mrg_right,
+            # pvr_right,
             ]
 
 def motion_control_spawner(context: LaunchContext) -> List[Node]:
@@ -211,7 +211,7 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
 
     return [
             tsmc_left, 
-            # tsmc_right,
+            tsmc_right,
             ]
 
 def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
@@ -239,7 +239,7 @@ def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
     
     return [
             rjd_left, 
-            # rjd_right,
+            rjd_right,
             ]
 
 def generate_launch_description():

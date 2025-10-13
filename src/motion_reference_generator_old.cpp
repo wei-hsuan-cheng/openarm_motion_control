@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include "robot_math_utils/robot_math_utils_v1_17.hpp"
-#include "robot_kinematics_utils/robot_kinematics_utils_v1_0.hpp"
+#include "robot_math_utils/robot_math_utils_v1_16.hpp"
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -15,7 +14,6 @@
 #include <chrono>
 
 using RM = RMUtils;
-using RK = RKUtils;
 using std::placeholders::_1;
 
 class MotionReferenceGenerator : public rclcpp::Node {
@@ -165,8 +163,8 @@ public:
       joint_limits_
     );
 
-    // Kinematics helper
-    rk_ = std::make_unique<RKUtils>(screws_);
+    // // Print screw list
+    // screws_.PrintList();
   }
 
   void initMotionParams() 
@@ -250,7 +248,7 @@ public:
     std::cout << "  " << gripper_joint_name << ": " << gripper_pos_cmd_ << "\n";
 
     // Initial pose command feasible from IK
-    pos_quat_b_e_ik_cmd_ = rk_->FKPoE(joint_angles_cmd_);
+    pos_quat_b_e_ik_cmd_ = RM::FKPoE(screws_, joint_angles_cmd_);
   }
 
   void initTimeSpec()
@@ -312,8 +310,8 @@ public:
     // Rotation: in Quaternion [-0.085, -0.191, 0.879, -0.429] // (w,x,y,z)
 
     // Time varying pose command
-    // double r = 0.175; // [m]
-    double r = 0.1; // [m]
+    double r = 0.175; // [m]
+    // double r = 0.1; // [m]
     double offset_x = r * cos(2.0 * M_PI * f_[0] * t_); // [m]
     // double offset_x = 0.0; // [m]
     double offset_y = 0.0; // [m]
@@ -340,17 +338,17 @@ public:
     const bool   wrap_pi   = true;
 
     auto t_start = std::chrono::high_resolution_clock::now();
-    bool ok = rk_->IKNum(pos_quat_b_e_cmd_, theta_sol_, cur_iter, eomg, ev, max_iter, lambda, step_clip, wrap_pi);
+    bool ok = RM::IKNum(screws_, pos_quat_b_e_cmd_, theta_sol_, cur_iter, eomg, ev, max_iter, lambda, step_clip, wrap_pi);
     auto t_end   = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_ms = t_end - t_start;
 
     // === Manipulability / Singularity check ===
-    MatrixXd J_e = rk_->Jacob(theta_sol_);
-    const double w         = RK::ManipulabilityIndex(J_e);
-    const double log10w    = RK::ManipulabilityIndexLog10(J_e);
-    const double sigma_min = RK::MinSingularValue(J_e);
+    MatrixXd J_e = RM::Jacob(screws_, theta_sol_);
+    const double w         = RM::ManipulabilityIndex(J_e);
+    const double log10w    = RM::ManipulabilityIndexLog10(J_e);
+    const double sigma_min = RM::MinSingularValue(J_e);
     const double sigma_min_threshold = 1.5 * pow(10, -2);
-    const bool   near_sing = RK::NearSingular(J_e, sigma_min_threshold);
+    const bool   near_sing = RM::NearSingular(J_e, sigma_min_threshold);
 
     // if (everyTimeInterval(1.0))
     // {
@@ -396,7 +394,7 @@ public:
   void solveFK()
   {
     // Compute FK with PoE and publish EE pose w.r.t. base
-    pos_quat_b_e_ik_cmd_ = rk_->FKPoE(joint_angles_cmd_);
+    pos_quat_b_e_ik_cmd_ = RM::FKPoE(screws_, joint_angles_cmd_);
 
     // std::cout << "\n-- FK result pose pos_quat_b_e_ik_cmd_ -->\n";
     // std::cout << "pos [m]: " << pos_quat_b_e_ik_cmd_.pos.transpose() << "\n";
@@ -497,7 +495,6 @@ private:
   MatrixXd joint_limits_; // n x 4: [ll, ul, v, e]
   PosQuat M_;
   ScrewList screws_;
-  std::unique_ptr<RKUtils> rk_;
   PosQuat pos_quat_b_e_nom_cmd_, pos_quat_b_e_cmd_; // nominal and time-varying pose command
   VectorXd theta_sol_;
   VectorXd joint_angles_cmd_;

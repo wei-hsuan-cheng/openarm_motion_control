@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include "robot_math_utils/robot_math_utils_v1_17.hpp"
-#include "robot_kinematics_utils/robot_kinematics_utils_v1_0.hpp"
+#include "robot_math_utils/robot_math_utils_v1_16.hpp"
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -16,7 +15,6 @@
 #include <limits>
 
 using RM = RMUtils;
-using RK = RKUtils;
 using std::placeholders::_1;
 using HighResClock = std::chrono::high_resolution_clock;
 
@@ -140,8 +138,8 @@ private:
   void initJointStates() {
     received_joint_states_ = false;
     // Init joint state
-    q_init_.setZero(n_);
-    qd_init_.setZero(n_);
+    q_.setZero(n_);
+    qd_.setZero(n_);
 
     // Name-keyed params: initial_joint_position.<joint>, initial_joint_velocity.<joint>
     for (int i = 0; i < n_; ++i) {
@@ -153,8 +151,8 @@ private:
       declare_parameter<double>(vel_key, std::numeric_limits<double>::quiet_NaN());
 
       double vpos, vvel;
-      if (get_parameter(pos_key, vpos) && std::isfinite(vpos)) q_init_(i)  = vpos;
-      if (get_parameter(vel_key, vvel) && std::isfinite(vvel)) qd_init_(i) = vvel;
+      if (get_parameter(pos_key, vpos) && std::isfinite(vpos)) q_(i)  = vpos;
+      if (get_parameter(vel_key, vvel) && std::isfinite(vvel)) qd_(i) = vvel;
     }
 
     is_first_loop_ = true;
@@ -162,9 +160,9 @@ private:
   }
 
   void initRobotState() {
-    // Init EE pose/twist via RobotKinematics
-    rk_ = std::make_unique<RKUtils>(screws_);
-    rk_->UpdateRobotState(q_init_, qd_init_);
+    // Init EE pose/twist
+    pos_quat_b_e_ = RM::FKPoE(screws_, q_);
+    twist_e_.setZero();
     last_log_ = std::chrono::steady_clock::now();
   }
 
@@ -174,7 +172,7 @@ private:
     tsmc_target_reached_ = false;
 
     // Desired EE pose
-    pos_quat_b_e_cmd_ = rk_->pose();
+    pos_quat_b_e_cmd_ = RM::FKPoE(screws_, q_);
     received_cmd_ = false;
 
     // Pose controller params
@@ -197,7 +195,7 @@ private:
     error_norm_buffer_.clear();
 
     // Init joint velocity command
-    qd_cmd_.setZero(rk_->dof());
+    qd_cmd_.setZero(n_);
 
   }
 
@@ -235,8 +233,8 @@ private:
 
   // ---------- subs / loop ----------
   void onPoseCmd(const geometry_msgs::msg::PoseStamped& msg) {
-    Vector3d pos = Vector3d(msg.pose.position.x, msg.pose.position.y, msg.pose.position.z);
-    Quaterniond quat = Quaterniond(msg.pose.orientation.w,
+    Vector3d pos = Eigen::Vector3d(msg.pose.position.x, msg.pose.position.y, msg.pose.position.z);
+    Quaterniond quat = Eigen::Quaterniond(msg.pose.orientation.w,
                                           msg.pose.orientation.x,
                                           msg.pose.orientation.y,
                                           msg.pose.orientation.z);
@@ -255,22 +253,19 @@ private:
     std::unordered_map<std::string, std::size_t> idx;
     idx.reserve(msg.name.size());
     for (std::size_t k = 0; k < msg.name.size(); ++k) idx[msg.name[k]] = k;
-    
-    // Fill q, qd only for the arm joints, ignore unknown/extras (e.g., gripper)
-    VectorXd q = rk_->q();
-    VectorXd qd = rk_->qd();
-
-    for (int i = 0; i < rk_->dof(); ++i) {
+    // Fill q_, qd_ only for the n_ arm joints, ignore unknown/extras (e.g., gripper)
+    for (int i = 0; i < n_; ++i) {
       auto it = idx.find(joint_names_[i]);
       if (it == idx.end()) continue;  // this joint not present in the msg
       std::size_t k = it->second;
 
       // Bounds check for position/velocity arrays
-      if (k < msg.position.size()) q(i) = msg.position[k];
-      if (k < msg.velocity.size()) qd(i) = msg.velocity[k];
+      if (k < msg.position.size()) q_(i) = msg.position[k];
+      if (k < msg.velocity.size()) qd_(i) = msg.velocity[k];
     }
-    // Update kinematic state
-    rk_->UpdateRobotState(q, qd);
+
+    // Update FK/DK for current end-effector pose/twist
+    solveFKDK();
 
     received_joint_states_ = true;
   }
@@ -297,18 +292,25 @@ private:
       last_log_ = std::chrono::steady_clock::now();
     }
   }
+
+  void solveFKDK() {
+    // FK for current end-effector pose
+    pos_quat_b_e_ = RM::FKPoE(screws_, q_);
+    // DK for current end-effector twist
+    twist_e_ = RM::Jacob(screws_, q_) * qd_;
+  }
   
   void taskSpaceMotionController() {
     // ===== Task space motion controller =====
     // Controller input (pose command and error)
-    PosQuat pos_quat_m_cmd = RM::PosQuats2RelativePosQuat(rk_->pose(), pos_quat_b_e_cmd_);
+    PosQuat pos_quat_m_cmd = RM::PosQuats2RelativePosQuat(pos_quat_b_e_, pos_quat_b_e_cmd_);
     pos_so3_m_cmd_ = RM::PosQuat2Posso3(pos_quat_m_cmd);
 
     // P-control for trajectory tracking
     Vector6d twist_cmd_raw = RM::KpPosso3(pos_so3_m_cmd_, kp_pos_so3_, tsmc_target_reached_);
 
     // Twist S-curve for smoothing
-    Vector6d twist_e_mavg = RM::MAvg(rk_->twist(), twist_e_buffer_, window_size_);
+    Vector6d twist_e_mavg = RM::MAvg(twist_e_, twist_e_buffer_, window_size_);
     // Vector6d twist_e_mavg = Vector6d::Zero();
     Vector6d twist_cmd  = RM::SCurve(twist_cmd_raw, twist_e_mavg, scur_.lambda, k_ * Ts_, scur_.T);
 
@@ -324,42 +326,64 @@ private:
   void RRMC69() 
   {
     // ===== Resolved-rate motion control; Whitney69 =====
+    // J_e(θ)
+    MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
     // Map from twist command to joint velocity command
     // double lambda_dls = 0.0; // DLS damping
     // double lambda_dls = 1e-2; // DLS damping
     double lambda_dls = 5e-2; // DLS damping
-    qd_cmd_ = rk_->JacobPinvDLS(rk_->jacob(), lambda_dls) * twist_e_cmd_;
+    if (lambda_dls > 0.0) {
+        // Damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I_6)^{-1}
+        MatrixXd A = Je * Je.transpose() + (lambda_dls * lambda_dls) * MatrixXd::Identity(6,6);
+        qd_cmd_ = Je.transpose() * A.inverse() * twist_e_cmd_;
+    } else {
+        qd_cmd_ = Je.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(twist_e_cmd_);
+    }
 
     // Print manipulability index and update minimum seen so far
-    double w = rk_->manipulability();
-    updateMinManipulability(rk_->jacob(), w);
-    std::cout << "w = " << w << "   (log10(w) = " << RKUtils::ManipulabilityIndexLog10(rk_->jacob())
+    double w = RM::ManipulabilityIndex(Je);
+    updateMinManipulability(Je, w);
+    std::cout << "w = " << w << "   (log10(w) = " << RM::ManipulabilityIndexLog10(Je)
               << ")   w_min = " << w_min_ << "\n";
+    // w_min = 0.00855028
   }
 
   void Park99() 
   {
     // ===== Manipulability maximization via Park99 =====
+    // J_e(θ)
+    MatrixXd Je = RM::Jacob(screws_, q_); // 6 x n
     // Map from twist command to joint velocity command
 
     // Pseudo-inverse with damped Least Squares: J⁺ = Jᵀ (J Jᵀ + λ² I_6)^{-1}
     double lambda_dls = 5e-2; // DLS damping
     // double lambda_dls = 0.0; // DLS damping
-    MatrixXd Je_pinv = rk_->JacobPinvDLS(rk_->jacob(), lambda_dls);
+    MatrixXd A = Je * Je.transpose() + (lambda_dls * lambda_dls) * MatrixXd::Identity(6,6);
+    MatrixXd Je_pinv = Je.transpose() * A.inverse();
     
     // Part controller (map from twist command to joint velocity command considering manipulability as secondary objective)
     // qd_cmd_ = J⁺ v + (1/λ) (I_n - J⁺ J) J_w
     double lambda = 1e-2; // secondary objective gain
     // Null space projection matrix
-    MatrixXd Nproj = MatrixXd::Identity(rk_->dof(), rk_->dof()) - Je_pinv * rk_->jacob();
-    VectorXd J_w = rk_->ManipulabilityGradient(rk_->q(), lambda_dls);
+    MatrixXd Nproj = MatrixXd::Identity(n_, n_) - Je_pinv * Je;
+    // auto t0 = HighResClock::now();
+    VectorXd J_w = RM::ManipulabilityGradient(screws_, q_, lambda_dls);
+    // auto t1 = HighResClock::now();
     qd_cmd_ = Je_pinv * twist_e_cmd_ + (1 / lambda) * Nproj * J_w;
+    
 
     // Print manipulability index and update minimum
-    double w = rk_->manipulability();
-    updateMinManipulability(rk_->jacob(), w);
-    // std::cout << "w = " << w << "   (log10(w) = " << RKUtils::ManipulabilityIndexLog10(rk_->jacob())
-    //           << ")   w_min = " << w_min_ << "\n";
+    double w = RM::ManipulabilityIndex(Je);
+    updateMinManipulability(Je, w);
+    std::cout << "w = " << w << "   (log10(w) = " << RM::ManipulabilityIndexLog10(Je)
+              << ")   w_min = " << w_min_ << "\n";
+    
+    // w_min = 0.00855861 @ lambda_dls=5e-2, lambda=1e-1
+    // w_min = 0.00861089 @ lambda_dls=5e-2, lambda=1e-2
+
+    // auto time_elapsed = elapsedUs(t0, t1);
+    // std::cout << "Time/Rate for ManipulabilityGradient: " << time_elapsed << " [us]"
+    //           << " (" << 1e6 / time_elapsed << " [Hz])\n";
   }
 
   // Smoothstep weight
@@ -377,18 +401,27 @@ private:
     return 1.0 - (3.0 * t * t - 2.0 * t * t * t);
   }
 
+  inline Eigen::MatrixXd pinv_dls(const Eigen::MatrixXd& J, double eps) const {
+    if (eps <= 0.0) {
+      return J.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Eigen::MatrixXd::Identity(J.rows(), J.rows()));
+    }
+    Eigen::MatrixXd A = J * J.transpose() + (eps * eps) * Eigen::MatrixXd::Identity(J.rows(), J.rows());
+    return J.transpose() * A.inverse();
+  }
+
   void Marani02()
   {
     // 1) δr
     const Vector6d delta_r = twist_e_cmd_; 
 
     // 2) Jacobian and its pseudo-inverse
-    double lambda_dls = 1e-6;       
-    MatrixXd Je_pinv = rk_->JacobPinvDLS(rk_->jacob(), lambda_dls); // n x 6
+    MatrixXd Je = RM::Jacob(screws_, q_);          // 6 x n
+    double pinv_dls_eps_ = 1e-6;       
+    MatrixXd Je_pinv = pinv_dls(Je, pinv_dls_eps_); // n x 6
 
     // 3) manipulability and its gradient（∂m/∂q）    (Marani Eq.(6),(10))
-    double w = rk_->manipulability();
-    VectorXd dm_dq = rk_->ManipulabilityGradient(rk_->q(), lambda_dls); // R^n
+    double w = RM::ManipulabilityIndex(Je);
+    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, pinv_dls_eps_); // R^n
 
     // 4) Normal n_m ∝ J^{+^T} (∂m/∂q)         (Marani Eq.(15))
     Vector6d nm = (dm_dq.transpose() * Je_pinv);   // R^n
@@ -396,7 +429,7 @@ private:
     if (nm_norm < 1e-12) {
       // Standard RRMC69
       qd_cmd_ = Je_pinv * delta_r;
-      updateMinManipulability(rk_->jacob(), w);
+      updateMinManipulability(Je, w);
       return;
     }
     nm /= nm_norm;
@@ -418,7 +451,7 @@ private:
     qd_cmd_ = Je_pinv * delta_r_proj;
 
     // 8) Logging
-    updateMinManipulability(rk_->jacob(), w);
+    updateMinManipulability(Je, w);
     std::cout << "[Marani02] w=" << w
               << "  k1=" << k1 << "  k2=" << k2
               << "  dot=" << s
@@ -428,12 +461,13 @@ private:
   void SAC()
   {
     // Jacobian and its pseudo-inverse
-    double lambda_dls = 1e-6;       
-    MatrixXd Je_pinv = rk_->JacobPinvDLS(rk_->jacob(), lambda_dls); // n x 6
+    MatrixXd Je = RM::Jacob(screws_, q_);          // 6 x n
+    double pinv_dls_eps_ = 1e-6;       
+    MatrixXd Je_pinv = pinv_dls(Je, pinv_dls_eps_); // n x 6
 
     // Manipulability and its gradient (∂w/∂q)
-    double w = rk_->manipulability();
-    VectorXd dm_dq = rk_->ManipulabilityGradient(rk_->q(), lambda_dls); // R^n
+    double w = RM::ManipulabilityIndex(Je);
+    VectorXd dm_dq = RM::ManipulabilityGradient(screws_, q_, pinv_dls_eps_); // R^n
 
     // Normal n_w ∝ (∂w/∂q) J^{+}          (Marani Eq.(15))
     Vector6d n_w = (dm_dq.transpose() * Je_pinv);   // R^6
@@ -441,7 +475,7 @@ private:
     if (n_w_norm < 1e-12) {
       // Standard RRMC69
       qd_cmd_ = Je_pinv * twist_e_cmd_;
-      updateMinManipulability(rk_->jacob(), w);
+      updateMinManipulability(Je, w);
       return;
     }
     n_w /= n_w_norm;
@@ -464,7 +498,7 @@ private:
     qd_cmd_ = Je_pinv * twist_e_cmd_sac;
 
     // Logging
-    updateMinManipulability(rk_->jacob(), w);
+    updateMinManipulability(Je, w);
     std::cout << "[SAC] w=" << w
               << "  k1=" << k1 << "  k2=" << k2
               << "  dot=" << s
@@ -476,9 +510,9 @@ private:
     sensor_msgs::msg::JointState js;
     js.header.stamp = now();
     js.name = joint_names_;
-    js.position.resize(rk_->dof());
-    js.velocity.resize(rk_->dof());
-    for (int i = 0; i < rk_->dof(); ++i) {
+    js.position.resize(n_);
+    js.velocity.resize(n_);
+    for (int i = 0; i < n_; ++i) {
       js.velocity[i] = qd_cmd_(i);
     }
     pub_joint_velocity_command_->publish(js);
@@ -511,9 +545,9 @@ private:
 
     // Map twist command to joint velocity command
     // RRMC69();
-    Park99();
+    // Park99();
     // Marani02();
-    // SAC();
+    SAC();
 
     // Send joint velocity command to motors
     publishJointVelocityCommand();
@@ -539,11 +573,11 @@ private:
   ScrewList screws_;
 
   // ---- control state ----
-  VectorXd q_init_;              // (n)
-  VectorXd qd_init_;             // (n)
-  VectorXd qd_cmd_;         // (n)
-  // Robot kinematics object
-  std::unique_ptr<RKUtils> rk_;
+  Eigen::VectorXd q_;              // (n)
+  Eigen::VectorXd qd_;             // (n)
+  Eigen::VectorXd qd_cmd_;         // (n)
+  PosQuat pos_quat_b_e_;
+  Vector6d twist_e_;
   
   // Pose controller params
   bool received_cmd_, received_joint_states_;

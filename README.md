@@ -8,7 +8,7 @@ This is a ROS 2 Humble package.
 ```bash
 cd ~/ros2_ws/src && git clone https://github.com/wei-hsuan-cheng/openarm_motion_control.git
 cd ~/ros2_ws && rosdep update && rosdep install --from-paths src --ignore-src -r -y
-colcon build --packages-select openarm_motion_control && . install/setup.bash
+colcon build --symlink-install --packages-select openarm_motion_control && . install/setup.bash
 ```
 
 ## Run Demo
@@ -27,16 +27,16 @@ colcon build --packages-select openarm_motion_control && . install/setup.bash
     ```bash
     # Robot FK/IK pure visualization
     ros2 launch openarm_motion_control visualize_motion.launch.py
-    ```
-    <p align="center">
-        <img src="assets/openarm_bimanual_demo.gif" alt="OpenArm Bimanual Demo" width="400"/>
-    </p>
-
-    ```bash
+    
     # Simulate robot motion control (first-order dynamics in each joint velocity)
     ros2 launch openarm_motion_control joint_space_motion_control.launch.py
     ros2 launch openarm_motion_control task_space_motion_control.launch.py
     ```
+
+- Robot visualization in RViz2
+    <p align="center">
+        <img src="assets/openarm_bimanual_demo.gif" alt="OpenArm Bimanual Demo" width="400"/>
+    </p>
 
 ## Acknowledgements
 
