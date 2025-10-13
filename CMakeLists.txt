@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.8)
 project(openarm_motion_control)
 
+# Hint CMake to user-local OSQP installation (if env vars not set)
+# Looks for ~/.local/lib/cmake/osqp/osqp-config.cmake and uses it.
+if(NOT DEFINED osqp_DIR AND EXISTS "$ENV{HOME}/.local/lib/cmake/osqp/osqp-config.cmake")
+  set(osqp_DIR "$ENV{HOME}/.local/lib/cmake/osqp" CACHE PATH "User-local OSQP package" FORCE)
+endif()
+# Also prepend ~/.local to CMAKE_PREFIX_PATH so other packages are found there
+if(EXISTS "$ENV{HOME}/.local")
+  list(PREPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local")
+endif()
+
 # Compiler settings
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -12,7 +22,7 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 # Suppress warnings for Eigen
-add_compile_options(-Wno-class-memacces)
+add_compile_options(-Wno-class-memaccess)
 
 # Find dependencies
 find_package(ament_cmake REQUIRED)
@@ -24,6 +34,7 @@ find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(osqp REQUIRED)
 
 
 # Dependencies list
@@ -49,6 +60,23 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
+# ===========================
+# Resolve OSQP imported target
+# (different distros expose different target names)
+# ===========================
+set(OSQP_TARGET "")
+# Prefer static to avoid runtime loader issues with ~/.local
+if(TARGET osqp::osqpstatic)
+  set(OSQP_TARGET osqp::osqpstatic)
+elseif(TARGET osqp::osqp)
+  set(OSQP_TARGET osqp::osqp)
+elseif(TARGET OSQP::osqp)
+  set(OSQP_TARGET OSQP::osqp)
+else()
+  # Fall back to 'osqp' if no imported target is defined
+  set(OSQP_TARGET osqp)
+endif()
+
 # Source files
 set(POSE_VISUALIZATION_LEFT_SOURCES src/pose_visualization_left.cpp)
 set(POSE_VISUALIZATION_RIGHT_SOURCES src/pose_visualization_right.cpp)
@@ -56,6 +84,24 @@ set(ROBOT_JOINT_DYNAMICS_SOURCES src/robot_joint_dynamics.cpp)
 set(JOINT_SPACE_MOTION_CONTROL_SOURCES src/joint_space_motion_control.cpp)
 set(TASK_SPACE_MOTION_CONTROL_SOURCES src/task_space_motion_control.cpp)
 set(MOTION_REFERENCE_GENERATOR_SOURCES src/motion_reference_generator.cpp)
+
+# ---- MMC QP backend (OSQP wrapper) ----
+# Headers live in include/: iqpsolver.hpp, mmc_qp_builder.hpp, osqp_solver.hpp
+# Source for the OSQP wrapper:
+add_library(mmc_qp STATIC
+  src/osqp_solver.cpp
+)
+# Link OSQP into the library (so consumers just link mmc_qp)
+target_link_libraries(mmc_qp
+  PUBLIC
+    ${OSQP_TARGET}
+)
+# If you prefer interface include dirs per target:
+target_include_directories(mmc_qp
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
 
 # Add executables
 add_executable(pose_visualization_left ${POSE_VISUALIZATION_LEFT_SOURCES})
@@ -73,8 +119,13 @@ ament_target_dependencies(joint_space_motion_control ${dependencies})
 ament_target_dependencies(task_space_motion_control ${dependencies})
 ament_target_dependencies(motion_reference_generator ${dependencies})
 
+# Explicitly link mmc_qp into the TSMC node (others unchanged)
+# Use plain signature to match ament_target_dependencies' usage style
+target_link_libraries(task_space_motion_control mmc_qp)
+
 # Install targets
 install(TARGETS
+  mmc_qp
   pose_visualization_left
   pose_visualization_right
   robot_joint_dynamics

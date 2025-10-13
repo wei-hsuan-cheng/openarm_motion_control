@@ -15,6 +15,11 @@
 #include <iostream>
 #include <limits>
 
+// MMC
+#include "iqpsolver.hpp"
+#include "mmc_qp_builder.hpp"
+#include "osqp_solver.hpp"
+
 using RM = RMUtils;
 using RK = RKUtils;
 using std::placeholders::_1;
@@ -30,6 +35,7 @@ public:
     initJointStates();
     initRobotState();
     initTSMCParams();
+    initMMC();
     initTimeSpec();
     initROSComponents();
     // Init logging
@@ -200,6 +206,50 @@ private:
     qd_cmd_.setZero(rk_->dof());
 
   }
+
+  void initMMC() {
+    solver_ = std::make_unique<OsqpSolver>();
+    static_cast<OsqpSolver*>(solver_.get())->setVerbose(false);
+
+    // Declare tunable parameters with aggressive defaults
+    declare_parameter<double>("mmc.lambda_q", 1e-3);
+    declare_parameter<double>("mmc.lambda_delta_min", 1e-3);
+    declare_parameter<double>("mmc.lambda_delta_max", 1e+3);
+    declare_parameter<double>("mmc.damper_eta", 0.8);
+    declare_parameter<double>("mmc.damper_rho_i_deg", 30.0); // inner zone [deg]
+    declare_parameter<double>("mmc.damper_rho_s_deg", 5.0);  // stop distance [deg]
+    declare_parameter<int>("mmc.jm_sign", -1);
+    declare_parameter<double>("mmc.delta_bound", 2.0);
+    declare_parameter<double>("mmc.t_lin", 1.0);
+    declare_parameter<double>("mmc.t_ang", 1.0);
+    declare_parameter<double>("mmc.max_twist_lin", 0.6);
+    declare_parameter<double>("mmc.max_twist_ang", 1.6);
+
+    get_parameter("mmc.lambda_q", mmc_params_.lambda_q);
+    get_parameter("mmc.lambda_delta_min", mmc_params_.lambda_delta_min);
+    get_parameter("mmc.lambda_delta_max", mmc_params_.lambda_delta_max);
+    get_parameter("mmc.damper_eta", mmc_params_.eta);
+    double rho_i_deg, rho_s_deg; int jm_sign;
+    get_parameter("mmc.damper_rho_i_deg", rho_i_deg);
+    get_parameter("mmc.damper_rho_s_deg", rho_s_deg);
+    get_parameter("mmc.jm_sign", jm_sign);
+    mmc_params_.rho_i = rho_i_deg * RM::d2r;
+    mmc_params_.rho_s = rho_s_deg * RM::d2r;
+    mmc_params_.jm_sign = jm_sign;
+    double delta_bound, t_lin, t_ang;
+    get_parameter("mmc.delta_bound", delta_bound);
+    get_parameter("mmc.t_lin", t_lin);
+    get_parameter("mmc.t_ang", t_ang);
+    mmc_params_.t_lin = t_lin;
+    mmc_params_.t_ang = t_ang;
+    mmc_params_.delta_min = Eigen::VectorXd::Constant(6, -std::abs(delta_bound));
+    mmc_params_.delta_max = Eigen::VectorXd::Constant(6,  std::abs(delta_bound));
+
+    // Cache twist limits for use in MMC_QP
+    get_parameter("mmc.max_twist_lin", max_twist_lin_);
+    get_parameter("mmc.max_twist_ang", max_twist_ang_);
+  }
+
 
   void initTimeSpec()
   {
@@ -471,6 +521,53 @@ private:
               << "  w_min=" << w_min_ << "\n";
   }
 
+  void MMCQP()
+  {
+    const auto& J = rk_->jacob();     // 6 x n
+
+    // Saturate commanded twist to keep QP feasible
+    auto saturate = [](const Eigen::Vector3d& v, double limit) -> Eigen::Vector3d {
+      double n = v.norm();
+      if (n > limit && n > 1e-12) return (v * (limit / n)).eval();
+      return v;
+    };
+    // const double max_lin = 0.3; // [m/s]
+    // const double max_ang = M_PI / 2.0; // [rad/s]
+    const double max_lin = 5.0; // [m/s]
+    const double max_ang = M_PI / 1.0; // [rad/s]
+    Eigen::Matrix<double,6,1> nu;
+    nu.head<3>() = saturate(twist_e_cmd_.head<3>(), max_lin);
+    nu.tail<3>() = saturate(twist_e_cmd_.tail<3>(), max_ang);
+    const auto q  = rk_->q();         // n
+    const int  n  = rk_->dof();
+
+    // Manipulability gradient (∂m/∂q)
+    Eigen::VectorXd Jm = rk_->ManipulabilityGradient(q, 1e-6); // n
+
+    // error magnitude for scheduling lambda_delta ~ 1/e
+    double pos_err = RM::Norm(pos_so3_m_cmd_.head(3));
+    double rot_err = RM::Norm(pos_so3_m_cmd_.tail(3));
+    double e = std::max(1e-4, pos_err + rot_err);
+    double lambda_delta_hint = 1.0 * 1e3 / e;
+
+    // Build the QP: x = [qdot(n); delta(6)]
+    MMCQPBuilder builder(mmc_params_);
+    QPProblem prob = builder.build(J, nu, Jm, q, joint_limits_, lambda_delta_hint);
+
+    // Solve
+    QPResult sol = solver_->solve(prob);
+
+    if (!sol.ok || sol.x.size() != n+6) {
+      // Fallback to DLS
+      double lambda_dls = 5e-2;
+      qd_cmd_ = rk_->JacobPinvDLS(J, lambda_dls) * nu;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[MMCQP] Fallback to DLS.");
+      return;
+    }
+    qd_cmd_ = sol.x.head(n);
+  }
+
+
   void publishJointVelocityCommand() {
     // Publish joint velocity command
     sensor_msgs::msg::JointState js;
@@ -511,9 +608,16 @@ private:
 
     // Map twist command to joint velocity command
     // RRMC69();
-    Park99();
+    // Park99();
     // Marani02();
     // SAC();
+
+    auto t0 = HighResClock::now();
+    MMCQP();
+    auto t1 = HighResClock::now();
+    double us = elapsedUs(t0, t1);
+    RCLCPP_INFO(get_logger(), "[MMCQP] Solve time/rate: %.3f [us] / %.1f [Hz]", us, 1e6/us);
+
 
     // Send joint velocity command to motors
     publishJointVelocityCommand();
@@ -576,6 +680,14 @@ private:
   bool is_first_loop_;
   double a_;
   double vel_limit_;
+
+  // --- MMC QP stuff ---
+  std::unique_ptr<IQPSolver> solver_;
+  MMCParams mmc_params_;
+  // Twist limits used to saturate commanded twist before QP
+  double max_twist_lin_{0.6};
+  double max_twist_ang_{1.6};
+
 
   // ROS
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_pose_cmd_;

@@ -146,7 +146,7 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
         parameters=[_load_screw_list_params(left_yaml),
                     {"gripper_joint_name": "openarm_left_finger_joint1"},
                     initial_cfg_path,
-                    {"fs": 100.0},
+                    {"fs": 50.0},
                     motion_params_left],
         remappings=[("/pose_command", "/openarm_left/pose_command"),
                     ("/joint_command", "/openarm_left/joint_command")],
@@ -160,7 +160,7 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
         parameters=[_load_screw_list_params(right_yaml),
                     {"gripper_joint_name": "openarm_right_finger_joint1"},
                     initial_cfg_path,
-                    {"fs": 100.0},
+                    {"fs": 50.0},
                     motion_params_right],
         remappings=[("/pose_command", "/openarm_right/pose_command"),
                     ("/joint_command", "/openarm_right/joint_command")],
@@ -173,7 +173,7 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
         output="screen",
         parameters=[_load_screw_list_params(right_yaml),
                     initial_cfg_path,
-                    {"fs": 100.0},
+                    {"fs": 50.0},
                     motion_params_right],
     )
     
@@ -192,7 +192,7 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     initial_cfg_path,
-                    {"fs": 100.0}],
+                    {"fs": 50.0}],
         remappings=[("/pose_command", "/openarm_left/pose_command"),
                     ("/joint_velocity_command", "/openarm_left/joint_velocity_command"),],
     )
@@ -204,7 +204,7 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
         output="screen",
         parameters=[_load_screw_list_params(right_yaml),
                     initial_cfg_path,
-                    {"fs": 100.0}],
+                    {"fs": 50.0}],
         remappings=[("/pose_command", "/openarm_right/pose_command"),
                     ("/joint_velocity_command", "/openarm_right/joint_velocity_command"),],
     )
@@ -222,7 +222,7 @@ def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
         output="screen",
         parameters=[_load_screw_list_params(left_yaml),
                     initial_cfg_path,
-                    {"fs": 500.0},],
+                    {"fs": 250.0},],
         remappings=[("/joint_velocity_command", "/openarm_left/joint_velocity_command")],
     )
     
@@ -233,7 +233,7 @@ def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
         output="screen",
         parameters=[_load_screw_list_params(right_yaml),
                     initial_cfg_path,
-                    {"fs": 500.0},],
+                    {"fs": 250.0},],
         remappings=[("/joint_velocity_command", "/openarm_right/joint_velocity_command")],
     )
     
