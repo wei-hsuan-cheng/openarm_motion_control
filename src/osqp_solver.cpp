@@ -1,4 +1,4 @@
-#include "osqp_solver.hpp"
+#include "mmc_qp_utils/osqp_solver.hpp"
 #include <osqp.h>
 #include <vector>
 #include <cassert>

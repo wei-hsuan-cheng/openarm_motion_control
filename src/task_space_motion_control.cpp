@@ -16,9 +16,9 @@
 #include <limits>
 
 // MMC
-#include "iqpsolver.hpp"
-#include "mmc_qp_builder.hpp"
-#include "osqp_solver.hpp"
+#include "mmc_qp_utils/iqpsolver.hpp"
+#include "mmc_qp_utils/mmc_qp_builder.hpp"
+#include "mmc_qp_utils/osqp_solver.hpp"
 
 using RM = RMUtils;
 using RK = RKUtils;
@@ -494,9 +494,6 @@ private:
     
     nu.head<3>() = saturate(twist_e_cmd_.head<3>(), max_lin);
     nu.tail<3>() = saturate(twist_e_cmd_.tail<3>(), max_ang);
-
-    // std::cout << "nu.head<3>().norm() = " << nu.head<3>().norm() << "\n";
-    // std::cout << "nu.tail<3>().norm() = " << nu.tail<3>().norm() << "\n";
 
     const auto q  = rk_->q();         // n
     const int  n  = rk_->dof();

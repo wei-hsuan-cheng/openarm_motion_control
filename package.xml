@@ -20,10 +20,6 @@
 
   <!-- External libraries -->
   <depend>eigen</depend>
-  <!-- <build_depend>osqp</build_depend>
-  <exec_depend>osqp</exec_depend>
-  <build_depend>osqp_vendor</build_depend> 
-  <exec_depend>osqp_vendor</exec_depend> -->
 
   <!-- Testing -->
   <test_depend>ament_lint_auto</test_depend>
