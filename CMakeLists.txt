@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.8)
 project(openarm_motion_control)
 
-# Hint CMake to user-local OSQP installation (if env vars not set)
-# Looks for ~/.local/lib/cmake/osqp/osqp-config.cmake and uses it.
-if(NOT DEFINED osqp_DIR AND EXISTS "$ENV{HOME}/.local/lib/cmake/osqp/osqp-config.cmake")
-  set(osqp_DIR "$ENV{HOME}/.local/lib/cmake/osqp" CACHE PATH "User-local OSQP package" FORCE)
-endif()
-# Also prepend ~/.local to CMAKE_PREFIX_PATH so other packages are found there
-if(EXISTS "$ENV{HOME}/.local")
-  list(PREPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local")
-endif()
+# # Hint CMake to user-local OSQP installation (if env vars not set)
+# # Looks for ~/.local/lib/cmake/osqp/osqp-config.cmake and uses it.
+# if(NOT DEFINED osqp_DIR AND EXISTS "$ENV{HOME}/.local/lib/cmake/osqp/osqp-config.cmake")
+#   set(osqp_DIR "$ENV{HOME}/.local/lib/cmake/osqp" CACHE PATH "User-local OSQP package" FORCE)
+# endif()
+# # Also prepend ~/.local to CMAKE_PREFIX_PATH so other packages are found there
+# if(EXISTS "$ENV{HOME}/.local")
+#   list(PREPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local")
+# endif()
 
 # Compiler settings
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -60,10 +60,7 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-# ===========================
-# Resolve OSQP imported target
-# (different distros expose different target names)
-# ===========================
+# Find OSQP target
 set(OSQP_TARGET "")
 # Prefer static to avoid runtime loader issues with ~/.local
 if(TARGET osqp::osqpstatic)
@@ -91,12 +88,10 @@ set(MOTION_REFERENCE_GENERATOR_SOURCES src/motion_reference_generator.cpp)
 add_library(mmc_qp STATIC
   src/osqp_solver.cpp
 )
-# Link OSQP into the library (so consumers just link mmc_qp)
 target_link_libraries(mmc_qp
   PUBLIC
     ${OSQP_TARGET}
 )
-# If you prefer interface include dirs per target:
 target_include_directories(mmc_qp
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -119,8 +114,6 @@ ament_target_dependencies(joint_space_motion_control ${dependencies})
 ament_target_dependencies(task_space_motion_control ${dependencies})
 ament_target_dependencies(motion_reference_generator ${dependencies})
 
-# Explicitly link mmc_qp into the TSMC node (others unchanged)
-# Use plain signature to match ament_target_dependencies' usage style
 target_link_libraries(task_space_motion_control mmc_qp)
 
 # Install targets

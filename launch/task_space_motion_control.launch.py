@@ -26,7 +26,7 @@ initial_cfg_path = os.path.join(
 )
 
 motion_params_left = {
-    "pos_x_cmd": 0.25,
+    "pos_x_cmd": 0.325, # 0.25
     "pos_y_cmd": 0.15,
     "pos_z_cmd": 0.5,
     "quat_w_cmd": -0.085,

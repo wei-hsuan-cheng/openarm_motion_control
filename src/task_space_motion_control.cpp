@@ -242,8 +242,8 @@ private:
     get_parameter("mmc.t_ang", t_ang);
     mmc_params_.t_lin = t_lin;
     mmc_params_.t_ang = t_ang;
-    mmc_params_.delta_min = Eigen::VectorXd::Constant(6, -std::abs(delta_bound));
-    mmc_params_.delta_max = Eigen::VectorXd::Constant(6,  std::abs(delta_bound));
+    mmc_params_.delta_min = VectorXd::Constant(6, -std::abs(delta_bound));
+    mmc_params_.delta_max = VectorXd::Constant(6,  std::abs(delta_bound));
 
     // Cache twist limits for use in MMC_QP
     get_parameter("mmc.max_twist_lin", max_twist_lin_);
@@ -475,74 +475,34 @@ private:
               << "  w_min=" << w_min_ << "\n";
   }
 
-  void SAC()
-  {
-    // Jacobian and its pseudo-inverse
-    double lambda_dls = 1e-6;       
-    MatrixXd Je_pinv = rk_->JacobPinvDLS(rk_->jacob(), lambda_dls); // n x 6
-
-    // Manipulability and its gradient (∂w/∂q)
-    double w = rk_->manipulability();
-    VectorXd dm_dq = rk_->ManipulabilityGradient(rk_->q(), lambda_dls); // R^n
-
-    // Normal n_w ∝ (∂w/∂q) J^{+}          (Marani Eq.(15))
-    Vector6d n_w = (dm_dq.transpose() * Je_pinv);   // R^6
-    double n_w_norm = n_w.norm();
-    if (n_w_norm < 1e-12) {
-      // Standard RRMC69
-      qd_cmd_ = Je_pinv * twist_e_cmd_;
-      updateMinManipulability(rk_->jacob(), w);
-      return;
-    }
-    n_w /= n_w_norm;
-
-    // Weight function k(m; \bar m) and the "escape" term k(m; \bar m/2)  (Marani Eq.(17),(19))
-    double w_thresh_ = 2e-2;
-    double k1 = shapeK(w, w_thresh_);
-    double k2 = shapeK(w, 0.5 * w_thresh_);
-
-    // Decelerate as twist ⋅ n_w < 0 and w <= w_thresh;
-    // twist becomes zero as k1 -> 1 (need 1 - k1)
-    double s = twist_e_cmd_.dot(n_w);
-    double s_norm = std::abs(s);
-    Vector6d twist_e_cmd_sac = twist_e_cmd_;
-    if (w <= w_thresh_ && s < 0.0) {
-      // Apply SAC
-      twist_e_cmd_sac = twist_e_cmd_ * (1.0 - k1);
-    }
-
-    qd_cmd_ = Je_pinv * twist_e_cmd_sac;
-
-    // Logging
-    updateMinManipulability(rk_->jacob(), w);
-    std::cout << "[SAC] w=" << w
-              << "  k1=" << k1 << "  k2=" << k2
-              << "  dot=" << s
-              << "  w_min=" << w_min_ << "\n";
-  }
-
   void MMCQP()
   {
     const auto& J = rk_->jacob();     // 6 x n
 
     // Saturate commanded twist to keep QP feasible
-    auto saturate = [](const Eigen::Vector3d& v, double limit) -> Eigen::Vector3d {
+    auto saturate = [](const Vector3d& v, double limit) -> Vector3d {
       double n = v.norm();
       if (n > limit && n > 1e-12) return (v * (limit / n)).eval();
       return v;
     };
+
     // const double max_lin = 0.3; // [m/s]
     // const double max_ang = M_PI / 2.0; // [rad/s]
     const double max_lin = 5.0; // [m/s]
     const double max_ang = M_PI / 1.0; // [rad/s]
-    Eigen::Matrix<double,6,1> nu;
+    Vector6d nu; // 6
+    
     nu.head<3>() = saturate(twist_e_cmd_.head<3>(), max_lin);
     nu.tail<3>() = saturate(twist_e_cmd_.tail<3>(), max_ang);
+
+    // std::cout << "nu.head<3>().norm() = " << nu.head<3>().norm() << "\n";
+    // std::cout << "nu.tail<3>().norm() = " << nu.tail<3>().norm() << "\n";
+
     const auto q  = rk_->q();         // n
     const int  n  = rk_->dof();
 
-    // Manipulability gradient (∂m/∂q)
-    Eigen::VectorXd Jm = rk_->ManipulabilityGradient(q, 1e-6); // n
+    // Manipulability gradient
+    VectorXd Jm = rk_->ManipulabilityGradient(q, 1e-6); // n
 
     // error magnitude for scheduling lambda_delta ~ 1/e
     double pos_err = RM::Norm(pos_so3_m_cmd_.head(3));
@@ -610,7 +570,6 @@ private:
     // RRMC69();
     // Park99();
     // Marani02();
-    // SAC();
 
     auto t0 = HighResClock::now();
     MMCQP();
