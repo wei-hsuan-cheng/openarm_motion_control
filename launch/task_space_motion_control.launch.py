@@ -179,8 +179,8 @@ def motion_reference_generator_spawner(context: LaunchContext) -> List[Node]:
     
     return [
             mrg_left, 
-            mrg_right,
-            # pvr_right,
+            # mrg_right,
+            pvr_right,
             ]
 
 def motion_control_spawner(context: LaunchContext) -> List[Node]:
@@ -211,7 +211,7 @@ def motion_control_spawner(context: LaunchContext) -> List[Node]:
 
     return [
             tsmc_left, 
-            tsmc_right,
+            # tsmc_right,
             ]
 
 def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
@@ -239,7 +239,7 @@ def robot_joint_dynamics_spawner(context: LaunchContext) -> List[Node]:
     
     return [
             rjd_left, 
-            rjd_right,
+            # rjd_right,
             ]
 
 def generate_launch_description():

@@ -10,6 +10,14 @@ struct OsqpSolver::Impl {
   OSQPSolver*   solver{nullptr};
   bool verbose{false};
 
+  // Persistent problem data
+  bool initialized{false};
+  OSQPInt nvar{0}, me{0}, mi{0}, nb{0}, m{0};
+  OSQPInt nnzP{0}, nnzA{0};
+  std::vector<OSQPInt> Pp, Pi, Ap, Ai; // structure
+  std::vector<OSQPFloat> Px, Ax;       // values
+  std::vector<OSQPFloat> q, l, u;      // vectors
+
   Impl() {
     settings = OSQPSettings_new();
     osqp_set_default_settings(settings);
@@ -17,6 +25,8 @@ struct OsqpSolver::Impl {
     settings->eps_abs  = 1e-4;
     settings->eps_rel  = 1e-4;
     settings->max_iter = 4000;
+    settings->warm_starting = 1;
+    settings->polishing = 0;
     settings->verbose  = 0;
   }
   ~Impl() {
@@ -34,147 +44,161 @@ void OsqpSolver::setEpsRel(double eps){ impl_->settings->eps_rel = (OSQPFloat)ep
 void OsqpSolver::setMaxIter(int iters){ impl_->settings->max_iter = (OSQPInt)iters; }
 void OsqpSolver::setVerbose(bool v){ impl_->settings->verbose = v ? 1 : 0; impl_->verbose = v; }
 
-static void denseToCscUpper(const Eigen::MatrixXd& M,
-                            std::vector<OSQPInt>& Ap, std::vector<OSQPInt>& Ai, std::vector<OSQPFloat>& Ax)
+static inline void build_P_diag_pattern(OSQPInt nvar,
+                                        std::vector<OSQPInt>& Pp,
+                                        std::vector<OSQPInt>& Pi)
 {
-  const OSQPInt rows = (OSQPInt)M.rows();
-  const OSQPInt cols = (OSQPInt)M.cols();
-  Ap.resize(cols+1);
-  std::vector<OSQPFloat> vals;
-  std::vector<OSQPInt>   idx;
-  vals.reserve((size_t)rows*(size_t)cols);
-  idx.reserve((size_t)rows*(size_t)cols);
-  OSQPInt count = 0;
-  for (OSQPInt j=0;j<cols;++j) {
-    Ap[(size_t)j] = count;
-    for (OSQPInt i=0;i<rows;++i) {
-      if (i>j) continue; // upper triangular
-      const double v = M((int)i,(int)j);
-      if (std::abs(v) > 0.0) {
-        vals.push_back((OSQPFloat)v);
-        idx.push_back(i);
-        ++count;
-      }
-    }
+  Pp.resize((size_t)nvar + 1);
+  Pi.resize((size_t)nvar);
+  for (OSQPInt j=0;j<nvar;++j) {
+    Pp[(size_t)j] = j;
+    Pi[(size_t)j] = j; // diagonal only
   }
-  Ap[(size_t)cols] = count;
-  Ai = std::move(idx);
-  Ax = std::move(vals);
+  Pp[(size_t)nvar] = nvar;
 }
 
-static void denseToCsc(const Eigen::MatrixXd& M,
-                       std::vector<OSQPInt>& Ap, std::vector<OSQPInt>& Ai, std::vector<OSQPFloat>& Ax)
+// Build fixed A pattern: [Eq( me x nvar ); Damper( mi x nvar ); I( nb x nvar )]
+static inline void build_A_pattern(OSQPInt n, OSQPInt nvar, OSQPInt me, OSQPInt mi, OSQPInt nb,
+                                   std::vector<OSQPInt>& Ap,
+                                   std::vector<OSQPInt>& Ai)
 {
-  const OSQPInt rows = (OSQPInt)M.rows();
-  const OSQPInt cols = (OSQPInt)M.cols();
-  Ap.resize(cols+1);
-  std::vector<OSQPFloat> vals;
-  std::vector<OSQPInt>   idx;
-  vals.reserve((size_t)rows*(size_t)cols);
-  idx.reserve((size_t)rows*(size_t)cols);
-  OSQPInt count = 0;
-  for (OSQPInt j=0;j<cols;++j) {
-    Ap[(size_t)j] = count;
-    for (OSQPInt i=0;i<rows;++i) {
-      const double v = M((int)i,(int)j);
-      if (std::abs(v) > 0.0) {
-        vals.push_back((OSQPFloat)v);
-        idx.push_back(i);
-        ++count;
-      }
+  Ap.resize((size_t)nvar + 1);
+  std::vector<OSQPInt> rows;
+  rows.reserve((size_t)(me*nvar + 2*n + nvar));
+  OSQPInt nnz = 0;
+  for (OSQPInt j=0;j<nvar;++j) {
+    Ap[(size_t)j] = nnz;
+    // Eq rows 0..me-1
+    for (OSQPInt r=0;r<me;++r) { rows.push_back(r); ++nnz; }
+    // Damper rows (two per joint column) located after eq block
+    if (j < n) {
+      rows.push_back(me + 2*j + 0); ++nnz; // lower: -qdot_j <= rhs
+      rows.push_back(me + 2*j + 1); ++nnz; // upper: +qdot_j <= rhs
     }
+    // Identity bounds row
+    rows.push_back(me + mi + j); ++nnz;
   }
-  Ap[(size_t)cols] = count;
-  Ai = std::move(idx);
-  Ax = std::move(vals);
+  Ap[(size_t)nvar] = nnz;
+  Ai = std::move(rows);
 }
 
-// Stack inequalities: [Aineq;  Aeq; -Aeq] x <= [bineq; beq; -beq]
-static void stackIneqWithEq(const QPProblem& p,
-                            Eigen::MatrixXd& Aall, Eigen::VectorXd& ball)
+// Fill A values into Ax following the fixed pattern above
+static inline void fill_A_values(const Eigen::MatrixXd& Aeq,
+                                 OSQPInt n, OSQPInt nvar, OSQPInt me, OSQPInt mi, OSQPInt nb,
+                                 std::vector<OSQPFloat>& Ax)
 {
-  const int ni = (int)p.Aineq.rows();
-  const int ne = (int)p.Aeq.rows();
-  const int n  = (int)p.Q.rows();
-  Aall.resize(ni + 2*ne, n);
-  ball.resize(ni + 2*ne);
+  const size_t nnzA = (size_t)(me*nvar + 2*n + nvar);
+  Ax.resize(nnzA);
+  size_t k = 0;
+  for (OSQPInt j=0;j<nvar;++j) {
+    // Eq block values for column j
+    for (OSQPInt r=0;r<me;++r) {
+      Ax[k++] = (OSQPFloat)Aeq((int)r,(int)j);
+    }
+    // Damper values
+    if (j < n) {
+      Ax[k++] = (OSQPFloat)(-1.0); // lower
+      Ax[k++] = (OSQPFloat)(+1.0); // upper
+    }
+    // Identity bounds
+    Ax[k++] = (OSQPFloat)(1.0);
+  }
+}
 
-  if (ni>0) {
-    Aall.topRows(ni) = p.Aineq;
-    ball.head(ni)    = p.bineq;
-  }
-  if (ne>0) {
-    Aall.middleRows(ni, ne) = p.Aeq;
-    ball.segment(ni, ne)    = p.beq;
-    Aall.bottomRows(ne)     = -p.Aeq;
-    ball.tail(ne)           = -p.beq;
-  }
+// Prepare l,u stacked vectors for [Eq; Inequality; Bounds]
+static inline void fill_lu(const Eigen::VectorXd& beq,
+                           const Eigen::VectorXd& bineq,
+                           const Eigen::VectorXd& lb,
+                           const Eigen::VectorXd& ub,
+                           OSQPInt me, OSQPInt mi, OSQPInt nb,
+                           std::vector<OSQPFloat>& l,
+                           std::vector<OSQPFloat>& u)
+{
+  l.resize((size_t)(me+mi+nb));
+  u.resize((size_t)(me+mi+nb));
+  // Eq: l=u=beq
+  for (OSQPInt i=0;i<me;++i) { l[i]=(OSQPFloat)beq((int)i); u[i]=(OSQPFloat)beq((int)i); }
+  // Inequality: l=-inf, u=bineq
+  for (OSQPInt i=0;i<mi;++i) { l[me+i]=-(OSQPFloat)OSQP_INFTY; u[me+i]=(OSQPFloat)bineq((int)i); }
+  // Bounds: l=lb, u=ub
+  for (OSQPInt i=0;i<nb;++i) { l[me+mi+i]=(OSQPFloat)lb((int)i); u[me+mi+i]=(OSQPFloat)ub((int)i); }
+}
+
+// Diagonal Px from Q diag (upper triangular)
+static inline void fill_P_diag(const Eigen::MatrixXd& Q,
+                               std::vector<OSQPFloat>& Px)
+{
+  const OSQPInt nvar = (OSQPInt)Q.rows();
+  Px.resize((size_t)nvar);
+  for (OSQPInt j=0;j<nvar;++j) Px[(size_t)j] = (OSQPFloat)Q((int)j,(int)j);
 }
 
 QPResult OsqpSolver::solve(const QPProblem& p)
 {
   QPResult r;
-  const int n = (int)p.Q.rows();
-  assert(p.Q.cols()==n);
-  assert(p.c.size()==n);
-  assert(p.lb.size()==n);
-  assert(p.ub.size()==n);
+  const OSQPInt nvar = (OSQPInt)p.Q.rows();
+  const OSQPInt me = (OSQPInt)p.Aeq.rows();
+  const OSQPInt mi = (OSQPInt)p.Aineq.rows();
+  const OSQPInt nb = nvar; // identity block for variable bounds
 
-  // Build A by stacking inequalities and bounds as OSQP "A x in [l,u]"
-  Eigen::MatrixXd AineqEq;
-  Eigen::VectorXd bineqEq;
-  stackIneqWithEq(p, AineqEq, bineqEq);
+  // First-time setup or dimension change
+  bool need_setup = (!impl_->initialized || impl_->nvar!=nvar || impl_->me!=me || impl_->mi!=mi);
 
-  const int mI = (int)AineqEq.rows();
-  Eigen::MatrixXd Aall(mI + n, n);
-  Aall.setZero();
-  if (mI>0) Aall.topRows(mI) = AineqEq;
-  Aall.bottomRows(n) = Eigen::MatrixXd::Identity(n,n);
+  if (need_setup) {
+    if (impl_->solver) { osqp_cleanup(impl_->solver); impl_->solver=nullptr; }
 
-  Eigen::VectorXd lower = Eigen::VectorXd::Constant(mI + n, -OSQP_INFTY);
-  Eigen::VectorXd upper(mI + n);
-  if (mI>0) upper.head(mI) = bineqEq; // AineqEq x <= bineqEq
-  upper.tail(n) = p.ub;               // I x in [lb, ub]
-  lower.tail(n) = p.lb;
+    impl_->nvar = nvar; impl_->me = me; impl_->mi = mi; impl_->nb = nb; impl_->m = me + mi + nb;
 
-  // Convert to CSC
-  std::vector<OSQPInt> Pp, Pi, Ap, Ai;
-  std::vector<OSQPFloat> Px, Ax;
-  const Eigen::MatrixXd Qsym = 0.5 * (p.Q + p.Q.transpose());
-  denseToCscUpper(Qsym, Pp, Pi, Px); // OSQP expects upper-triangular part
-  denseToCsc(Aall, Ap, Ai, Ax);
+    // P pattern (diagonal)
+    build_P_diag_pattern(nvar, impl_->Pp, impl_->Pi);
+    impl_->nnzP = nvar;
+    fill_P_diag(p.Q, impl_->Px);
 
-  // Prepare vectors q, l, u
-  std::vector<OSQPFloat> q((size_t)n);
-  for (int i=0;i<n;++i) q[(size_t)i] = (OSQPFloat)p.c(i);
-  const int m = (int)Aall.rows();
-  std::vector<OSQPFloat> l((size_t)m), u((size_t)m);
-  for (int i=0;i<m;++i) { l[(size_t)i] = (OSQPFloat)lower(i); u[(size_t)i] = (OSQPFloat)upper(i); }
+    // A pattern
+    build_A_pattern((OSQPInt)(nvar-6), nvar, me, mi, nb, impl_->Ap, impl_->Ai);
+    impl_->nnzA = (OSQPInt)(me*nvar + 2*(nvar-6) + nvar);
+    fill_A_values(p.Aeq, (OSQPInt)(nvar-6), nvar, me, mi, nb, impl_->Ax);
 
-  // Wrap CSC matrices (no copy of arrays)
-  OSQPCscMatrix* P = OSQPCscMatrix_new((OSQPInt)n, (OSQPInt)n, (OSQPInt)Px.size(),
-                                       Px.data(), Pi.data(), Pp.data());
-  OSQPCscMatrix* A = OSQPCscMatrix_new((OSQPInt)m, (OSQPInt)n, (OSQPInt)Ax.size(),
-                                       Ax.data(), Ai.data(), Ap.data());
+    // q,l,u
+    impl_->q.resize((size_t)nvar);
+    for (OSQPInt i=0;i<nvar;++i) impl_->q[(size_t)i]=(OSQPFloat)p.c((int)i);
+    fill_lu(p.beq, p.bineq, p.lb, p.ub, me, mi, nb, impl_->l, impl_->u);
 
-  // Re-setup solver each call (simple path)
-  if (impl_->solver) {
-    osqp_cleanup(impl_->solver);
-    impl_->solver = nullptr;
+    // Wrap and setup
+    OSQPCscMatrix* P0 = OSQPCscMatrix_new(nvar, nvar, impl_->nnzP,
+                                          impl_->Px.data(), impl_->Pi.data(), impl_->Pp.data());
+    OSQPCscMatrix* A0 = OSQPCscMatrix_new(impl_->m, nvar, impl_->nnzA,
+                                          impl_->Ax.data(), impl_->Ai.data(), impl_->Ap.data());
+    OSQPSolver* solver = nullptr;
+    OSQPInt status = osqp_setup(&solver,
+                                P0, impl_->q.data(),
+                                A0, impl_->l.data(), impl_->u.data(),
+                                impl_->m, nvar,
+                                impl_->settings);
+    // Free wrappers
+    if (P0) OSQPCscMatrix_free(P0);
+    if (A0) OSQPCscMatrix_free(A0);
+    if (status != 0 || !solver) {
+      if (impl_->verbose) std::cerr << "[OSQP] setup failed: " << status << "\n";
+      r.ok = false; return r;
+    }
+    impl_->solver = solver;
+    impl_->initialized = true;
+  } else {
+    // Update P (diagonal may change), A eq block values, q, l, u
+    fill_P_diag(p.Q, impl_->Px);
+    fill_A_values(p.Aeq, (OSQPInt)(nvar-6), nvar, me, mi, nb, impl_->Ax);
+    for (OSQPInt i=0;i<nvar;++i) impl_->q[(size_t)i]=(OSQPFloat)p.c((int)i);
+    fill_lu(p.beq, p.bineq, p.lb, p.ub, me, mi, nb, impl_->l, impl_->u);
+
+    osqp_update_data_vec(impl_->solver,
+                         impl_->q.data(),
+                         impl_->l.data(),
+                         impl_->u.data());
+    osqp_update_data_mat(impl_->solver,
+                         impl_->Px.data(), nullptr, impl_->nnzP,
+                         impl_->Ax.data(), nullptr, impl_->nnzA);
   }
-  OSQPSolver* solver = nullptr;
-  OSQPInt status = osqp_setup(&solver,
-                              P, q.data(),
-                              A, l.data(), u.data(),
-                              (OSQPInt)m, (OSQPInt)n,
-                              impl_->settings);
-  if (status != 0 || !solver) {
-    if (impl_->verbose) std::cerr << "[OSQP] setup failed: " << status << "\n";
-    if (P) OSQPCscMatrix_free(P);
-    if (A) OSQPCscMatrix_free(A);
-    r.ok = false; return r;
-  }
-  impl_->solver = solver;
 
   // Solve
   osqp_solve(impl_->solver);
@@ -193,11 +217,7 @@ QPResult OsqpSolver::solve(const QPProblem& p)
   r.ok = (info && (info->status_val == OSQP_SOLVED || info->status_val == OSQP_SOLVED_INACCURATE));
   r.iters = info ? (int)info->iter : 0;
   r.obj = info ? (double)info->obj_val : 0.0;
-  r.x.resize(n);
-  if (sol && sol->x) for (int i=0;i<n;++i) r.x(i) = (double)sol->x[i];
-
-  // Free wrappers (they only free wrapper unless owned=1)
-  if (P) OSQPCscMatrix_free(P);
-  if (A) OSQPCscMatrix_free(A);
+  r.x.resize((int)nvar);
+  if (sol && sol->x) for (int i=0;i<(int)nvar;++i) r.x(i) = (double)sol->x[i];
   return r;
 }

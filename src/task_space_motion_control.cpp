@@ -327,6 +327,31 @@ private:
 
 
   // Helpers
+  // Smoothstep weight
+  inline double shapeK(double mval, double mbar) const {
+    // Smoothstep weight s.t. 
+    // m>=m_bar -> 0；
+    // m<=m_bar/2 -> 1；
+    // zero first-ordered derivative at endpoints
+
+    if (mval >= mbar) return 0.0;
+    if (mval <= 0.5 * mbar) return 1.0;
+    // t∈[0,1]: map from [mbar/2, mbar] to [0,1]
+    double t = (mval - 0.5 * mbar) / (0.5 * mbar); // t ∈ (0,1)
+    // smoothstep：1 - (3t^2 - 2t^3)
+    return 1.0 - (3.0 * t * t - 2.0 * t * t * t);
+  }
+
+  // Update the lowest manipulability encountered and optionally log
+  void updateMinManipulability(const MatrixXd& Je, double w_current) {
+    (void)Je; // reserved for future diagnostics
+    if (!std::isfinite(w_current)) return;
+    if (w_current < w_min_) {
+      w_min_ = w_current;
+      // RCLCPP_WARN(get_logger(), "[Manipulability] New minimum observed: w_min=%.6e", w_min_);
+    }
+  }
+
   bool everyTimeInterval(const std::chrono::steady_clock::time_point& last_log, const double& t = 2.0) {
     auto now_steady = std::chrono::steady_clock::now();
     if (std::chrono::duration<double>(now_steady - last_log).count() >= t) return true;
@@ -342,8 +367,8 @@ private:
   void periodicLogging(double t = 2.0) {
     if (everyTimeInterval(last_log_, t)) 
     {
-      RCLCPP_INFO(get_logger(), "pos_so3_error [m, rad]: [%.4f, %.4f], w_min=%.6e",
-                  error_norm_mavg_(0), error_norm_mavg_(1), w_min_);
+      RCLCPP_INFO(get_logger(), "pos_so3_error [m, rad]: [%.4f, %.4f], w_curr=%.6e, w_min=%.6e",
+                  error_norm_mavg_(0), error_norm_mavg_(1), rk_->manipulability(), w_min_);
       last_log_ = std::chrono::steady_clock::now();
     }
   }
@@ -410,21 +435,6 @@ private:
     updateMinManipulability(rk_->jacob(), w);
     // std::cout << "w = " << w << "   (log10(w) = " << RKUtils::ManipulabilityIndexLog10(rk_->jacob())
     //           << ")   w_min = " << w_min_ << "\n";
-  }
-
-  // Smoothstep weight
-  inline double shapeK(double mval, double mbar) const {
-    // Smoothstep weight s.t. 
-    // m>=m_bar -> 0；
-    // m<=m_bar/2 -> 1；
-    // zero first-ordered derivative at endpoints
-
-    if (mval >= mbar) return 0.0;
-    if (mval <= 0.5 * mbar) return 1.0;
-    // t∈[0,1]: map from [mbar/2, mbar] to [0,1]
-    double t = (mval - 0.5 * mbar) / (0.5 * mbar); // t ∈ (0,1)
-    // smoothstep：1 - (3t^2 - 2t^3)
-    return 1.0 - (3.0 * t * t - 2.0 * t * t * t);
   }
 
   void Marani02()
@@ -518,10 +528,12 @@ private:
       // Fallback to DLS
       double lambda_dls = 5e-2;
       qd_cmd_ = rk_->JacobPinvDLS(J, lambda_dls) * nu;
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[MMCQP] Fallback to DLS.");
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[MMCQP] QP infeasible -> Fallback to DLS.");
       return;
     }
     qd_cmd_ = sol.x.head(n);
+
+    updateMinManipulability(rk_->jacob(), rk_->manipulability());
   }
 
 
@@ -572,7 +584,7 @@ private:
     MMCQP();
     auto t1 = HighResClock::now();
     double us = elapsedUs(t0, t1);
-    RCLCPP_INFO(get_logger(), "[MMCQP] Solve time/rate: %.3f [us] / %.1f [Hz]", us, 1e6/us);
+    // RCLCPP_INFO(get_logger(), "[MMCQP] Solve time/rate: %.3f [us] / %.1f [Hz]", us, 1e6/us);
 
 
     // Send joint velocity command to motors
@@ -656,16 +668,6 @@ private:
 
   // manipulability tracking
   double w_min_ { std::numeric_limits<double>::infinity() };
-
-  // Update the lowest manipulability encountered and optionally log
-  void updateMinManipulability(const MatrixXd& Je, double w_current) {
-    (void)Je; // reserved for future diagnostics
-    if (!std::isfinite(w_current)) return;
-    if (w_current < w_min_) {
-      w_min_ = w_current;
-      RCLCPP_WARN(get_logger(), "[Manipulability] New minimum observed: w_min=%.6e", w_min_);
-    }
-  }
 };
 
 int main(int argc, char** argv)

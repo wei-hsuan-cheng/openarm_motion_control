@@ -97,48 +97,37 @@ public:
       prob.ub.tail(6).array() =  0.2;
     }
 
-    // Inequalities from velocity damper near joint limits
-    // Each row is qdot_i <= rhs (we add rows only when close to limits)
-    if (P_.use_joint_limit_damper && joint_limits.rows()==n && joint_limits.cols()>=2) {
-      std::vector<Eigen::RowVectorXd> Arows;
-      std::vector<double>             brows;
-
+    // Inequalities from velocity damper near joint limits (fixed 2n rows)
+    // Row layout per joint i: lower (-qdot_i <= rhs_lower), upper (qdot_i <= rhs_upper)
+    {
+      const double kInf = 1e30; // large to deactivate when far from limits
+      prob.Aineq.setZero(2*n, nv);
+      prob.bineq.setZero(2*n);
       for (int i=0;i<n;++i) {
-        const double ll = joint_limits(i,0);
-        const double ul = joint_limits(i,1);
-        const double dist_ll = q(i) - ll;
-        const double dist_ul = ul - q(i);
+        // Structure constant
+        prob.Aineq(2*i + 0, i) = -1.0;
+        prob.Aineq(2*i + 1, i) = +1.0;
 
-        auto add_row = [&](double rho, int joint_index, int sign_pos_dir){
-          // sign_pos_dir=+1 enforces  qdot_j <= rhs
-          // use only if inside inner zone
-          if (rho < P_.rho_i) {
-            const double rhs = P_.eta * ((rho - P_.rho_s) / (P_.rho_i - P_.rho_s));
-            Eigen::RowVectorXd row = Eigen::RowVectorXd::Zero(nv);
-            row(joint_index) = static_cast<double>(sign_pos_dir);
-            Arows.push_back(row);
-            brows.push_back(rhs);
-          }
-        };
-
-        // Near lower limit -> discourage negative velocities
-        // Use a lower-bound inequality: -qdot_i <= rhs  =>  qdot_i >= -rhs
-        add_row(dist_ll, i, -1);
-        // Near upper limit -> discourage positive velocities
-        add_row(dist_ul, i, +1);
-      }
-
-      if (!Arows.empty()) {
-        prob.Aineq.resize((int)Arows.size(), nv);
-        prob.bineq.resize((int)Arows.size());
-        for (int r=0;r<(int)Arows.size();++r) {
-          prob.Aineq.row(r) = Arows[r];
-          prob.bineq(r)     = brows[r];
+        double rhs_lower = kInf;
+        double rhs_upper = kInf;
+        if (joint_limits.rows()==n && joint_limits.cols()>=2 && P_.use_joint_limit_damper) {
+          const double ll = joint_limits(i,0);
+          const double ul = joint_limits(i,1);
+          const double dist_ll = q(i) - ll;
+          const double dist_ul = ul - q(i);
+          auto compute_rhs = [&](double rho){
+            if (rho < P_.rho_i) {
+              return P_.eta * ((rho - P_.rho_s) / (P_.rho_i - P_.rho_s));
+            } else {
+              return kInf;
+            }
+          };
+          rhs_lower = compute_rhs(dist_ll);
+          rhs_upper = compute_rhs(dist_ul);
         }
+        prob.bineq(2*i + 0) = rhs_lower;
+        prob.bineq(2*i + 1) = rhs_upper;
       }
-    } else {
-      prob.Aineq.resize(0, nv);
-      prob.bineq.resize(0);
     }
 
     return prob;
