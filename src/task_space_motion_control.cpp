@@ -584,7 +584,7 @@ private:
     MMCQP();
     auto t1 = HighResClock::now();
     double us = elapsedUs(t0, t1);
-    // RCLCPP_INFO(get_logger(), "[MMCQP] Solve time/rate: %.3f [us] / %.1f [Hz]", us, 1e6/us);
+    RCLCPP_INFO(get_logger(), "[MMCQP] Solve time/rate: %.3f [us] / %.1f [Hz]", us, 1e6/us);
 
 
     // Send joint velocity command to motors
