@@ -218,7 +218,7 @@ private:
     declare_parameter<double>("mmc.damper_eta", 0.8);
     declare_parameter<double>("mmc.damper_rho_i_deg", 30.0); // inner zone [deg]
     declare_parameter<double>("mmc.damper_rho_s_deg", 5.0);  // stop distance [deg]
-    declare_parameter<int>("mmc.jm_sign", -1);
+    declare_parameter<int>("mmc.jw_sign", -1);
     declare_parameter<double>("mmc.delta_bound", 2.0);
     declare_parameter<double>("mmc.t_lin", 1.0);
     declare_parameter<double>("mmc.t_ang", 1.0);
@@ -229,13 +229,13 @@ private:
     get_parameter("mmc.lambda_delta_min", mmc_params_.lambda_delta_min);
     get_parameter("mmc.lambda_delta_max", mmc_params_.lambda_delta_max);
     get_parameter("mmc.damper_eta", mmc_params_.eta);
-    double rho_i_deg, rho_s_deg; int jm_sign;
+    double rho_i_deg, rho_s_deg; int jw_sign;
     get_parameter("mmc.damper_rho_i_deg", rho_i_deg);
     get_parameter("mmc.damper_rho_s_deg", rho_s_deg);
-    get_parameter("mmc.jm_sign", jm_sign);
+    get_parameter("mmc.jw_sign", jw_sign);
     mmc_params_.rho_i = rho_i_deg * RM::d2r;
     mmc_params_.rho_s = rho_s_deg * RM::d2r;
-    mmc_params_.jm_sign = jm_sign;
+    mmc_params_.jw_sign = jw_sign;
     double delta_bound, t_lin, t_ang;
     get_parameter("mmc.delta_bound", delta_bound);
     get_parameter("mmc.t_lin", t_lin);
@@ -509,17 +509,21 @@ private:
     const int  n  = rk_->dof();
 
     // Manipulability gradient
-    VectorXd Jm = rk_->ManipulabilityGradient(q, 1e-6); // n
+    VectorXd Jw = rk_->ManipulabilityGradient(q, 1e-6); // n
 
     // error magnitude for scheduling lambda_delta ~ 1/e
     double pos_err = RM::Norm(pos_so3_m_cmd_.head(3));
     double rot_err = RM::Norm(pos_so3_m_cmd_.tail(3));
     double e = std::max(1e-4, pos_err + rot_err);
     double lambda_delta_hint = 1.0 * 1e3 / e;
+    // double lambda_delta_hint = 1.0 * 1e0 / e;
+
+    // Cost ratio Q_c_ratio
+    double Q_c_ratio = 1.0 * 1e0;
 
     // Build the QP: x = [qdot(n); delta(6)]
     MMCQPBuilder builder(mmc_params_);
-    QPProblem prob = builder.build(J, nu, Jm, q, joint_limits_, lambda_delta_hint);
+    QPProblem prob = builder.build(J, nu, Jw, q, joint_limits_, lambda_delta_hint, Q_c_ratio);
 
     // Solve
     QPResult sol = solver_->solve(prob);
@@ -532,6 +536,11 @@ private:
       return;
     }
     qd_cmd_ = sol.x.head(n);
+
+    // // print twist command (original) and optimized result and slack values
+    // std::cout << "[MMCQP] nu_cmd = " << nu.transpose() << "\n";
+    // std::cout << "[MMCQP] nu_opt = " << (J * qd_cmd_).transpose() << "\n";
+    // std::cout << "[MMCQP] slack = " << sol.x.tail(6).transpose() << "\n";
 
     updateMinManipulability(rk_->jacob(), rk_->manipulability());
   }

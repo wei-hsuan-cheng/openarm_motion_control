@@ -27,8 +27,8 @@ struct MMCParams {
   double rho_s = M_PI *  2.0/180.0; // stop distance (rad)
 
   // Sign for linear manipulability term in objective:
-  // minimize( ... + c^T x ), c=head(n)=jm_sign * Jm, with jm_sign=-1 => maximize m
-  int jm_sign = -1;
+  // minimize( ... + c^T x ), c=head(n)=jw_sign * Jw, with jw_sign=-1 => maximize w
+  int jw_sign = -1;
 };
 
 // Utility: clamp scalar to [a,b]
@@ -41,13 +41,14 @@ public:
   explicit MMCQPBuilder(const MMCParams& P) : P_(P) {}
 
   // Build QP with decision x = [qdot(n); delta(6)]
-  // J: 6xn, nu: 6, Jm: n, q: n, joint_limits: n x 4 [ll, ul, vel, effort]
+  // J: 6xn, nu: 6, Jw: n, q: n, joint_limits: n x 4 [ll, ul, vel, effort]
   QPProblem build(const Eigen::MatrixXd& J,
                   const Eigen::VectorXd& nu,
-                  const Eigen::VectorXd& Jm,
+                  const Eigen::VectorXd& Jw,
                   const Eigen::VectorXd& q,
                   const Eigen::MatrixXd& joint_limits,
-                  double lambda_delta_hint = 1.0) const
+                  double lambda_delta_hint = 1.0,
+                  double Q_c_ratio = 1.0) const
   {
     const int n = J.cols();
     const int nv = n + 6; // qdot + delta
@@ -58,10 +59,11 @@ public:
     prob.Q.topLeftCorner(n, n).diagonal().array() = P_.lambda_q;
     const double lam_d = clamp(lambda_delta_hint, P_.lambda_delta_min, P_.lambda_delta_max);
     prob.Q.bottomRightCorner(6, 6).diagonal().array() = lam_d;
+    prob.Q *= Q_c_ratio;
 
     // c
     prob.c = Eigen::VectorXd::Zero(nv);
-    prob.c.head(n) = P_.jm_sign * Jm; // maximize m by minimizing c^T x with negative sign
+    prob.c.head(n) = P_.jw_sign * Jw; // maximize m by minimizing c^T x with negative sign
 
     // Equality: [J  T] [qdot; delta] = nu, where T = diag(t_lin*I3, t_ang*I3)
     prob.Aeq.resize(6, nv);
